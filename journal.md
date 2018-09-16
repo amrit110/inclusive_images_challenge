@@ -28,4 +28,4 @@
 
 - [ ] Train a baseline multi-class classifier, by simply cropping images to
 fixed dimension and predicting for all trainable classes. Use validation set, but
-also the state-1 fine-tuning set as test set.
+also the stage-1 fine-tuning set as test set.

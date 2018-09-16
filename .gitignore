@@ -1,2 +1,7 @@
 .ipynb_checkpoints
 venv
+__pycache__
+checkpoints
+logs
+torchvision
+trainval_image_paths.txt
