@@ -3,6 +3,7 @@
 import argparse, os, glob, random, collections, copy
 import logging
 from PIL import Image
+import pickle
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,7 +18,8 @@ from utils import custom_collate
 
 # Parse Args
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
-parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
+parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+parser.add_argument('--batch-size', default=32, type=float, help='batch size')
 parser.add_argument('--exp_name', default='inclusive_images_challenge', type=str,
                     help='name of experiment')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
@@ -34,12 +36,19 @@ setup_logging(log_path=log_file, logger=LOGGER)
 class IncImagesDataset:
     """Dataset for the challenge."""
 
-    def __init__(self, data_path, mode='train', transform=None):
+    def __init__(self, data_path, mode='train', transform=None, cache_dir='cache'):
         """Constructor."""
         self.data_path = data_path
         self.mode = mode
         self.transform = transform
-        self.trainval_human_labels = self.read_trainval_human_labels()
+        self.cache_dir = cache_dir
+        cache_exists = self.load_labels_from_cache()
+        if not cache_exists:
+            LOGGER.info("Creating label dicts, this takes a few minutes ...")
+            self.trainval_human_labels = self.read_trainval_human_labels()
+            self.trainval_machine_labels = self.read_trainval_machine_labels()
+            self.trainval_bbox_labels = self.read_trainval_bbox_labels()
+            self.save_labels_to_cache()
         self.test_labels = self.read_tuning_labels_stage_1()
         self.train_images, self.val_images = self.get_train_val_split()
         self.label_map, self.reverse_label_map = self.get_label_map()
@@ -52,6 +61,38 @@ class IncImagesDataset:
         if mode == 'test':
             LOGGER.info("No. of test images: {}".format(len(self.test_images)))
             LOGGER.info("No. of trainable classes: {}".format(self.n_trainable_classes))
+
+    def load_labels_from_cache(self):
+        """Load label dicts from cache."""
+        human_labels_cache_path = os.path.join(self.cache_dir, 'human_labels.pkl')
+        machine_labels_cache_path = os.path.join(self.cache_dir, 'machine_labels.pkl')
+        bbox_labels_cache_path = os.path.join(self.cache_dir, 'bbox_labels.pkl')
+        if os.path.isfile(human_labels_cache_path) and \
+            os.path.isfile(machine_labels_cache_path) and \
+                os.path.isfile(machine_labels_cache_path):
+            LOGGER.info("Loading label dicts from cache ...")
+            with open(human_labels_cache_path, 'rb') as handle:
+                self.trainval_human_labels = pickle.load(handle)
+            with open(machine_labels_cache_path, 'rb') as handle:
+                self.trainval_machine_labels = pickle.load(handle)
+            with open(bbox_labels_cache_path, 'rb') as handle:
+                self.trainval_bbox_labels = pickle.load(handle)
+            return True
+        else:
+            return False
+
+    def save_labels_to_cache(self):
+        """Save label dicts to cache."""
+        os.makedirs(self.cache_dir, exist_ok=True)
+        human_labels_cache_path = os.path.join(self.cache_dir, 'human_labels.pkl')
+        machine_labels_cache_path = os.path.join(self.cache_dir, 'machine_labels.pkl')
+        bbox_labels_cache_path = os.path.join(self.cache_dir, 'bbox_labels.pkl')
+        with open(human_labels_cache_path, 'wb') as handle:
+            pickle.dump(self.trainval_human_labels, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(machine_labels_cache_path, 'wb') as handle:
+            pickle.dump(self.trainval_machine_labels, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(bbox_labels_cache_path, 'wb') as handle:
+            pickle.dump(self.trainval_bbox_labels, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def __len__(self):
         """Get length of dataset."""
@@ -98,16 +139,12 @@ class IncImagesDataset:
     def get_label_map(self):
         """Map string labels to indices."""
         trainable_classes = self.read_trainable_classes()
-        tmp_label_map, label_map, reverse_label_map = {}, {}, {}
-        # Remove duplicates
-        for key, cls_name in trainable_classes.items():
-            tmp_label_map[cls_name] = key
+        label_map, reverse_label_map = {}, {}
         index = 0
-        for cls_name, label_id in tmp_label_map.items():
-            label_map[cls_name] = index
+        for key, cls_name in trainable_classes.items():
+            label_map[key] = index
+            reverse_label_map[index] = key
             index += 1
-        for cls_name, cls_index in label_map.items():
-            reverse_label_map[cls_index] = tmp_label_map[cls_name]
         return label_map, reverse_label_map
 
     def read_trainval_human_labels(self):
@@ -125,9 +162,47 @@ class IncImagesDataset:
                 if not human_train_labels.get(image_id):
                     human_train_labels[image_id] = {'labels': [], 'confidences': []}
                 else:
-                    human_train_labels[image_id]['labels'].append(class_map[label_code])
+                    human_train_labels[image_id]['labels'].append(label_code)
                     human_train_labels[image_id]['confidences'].append(confidence)
         return human_train_labels
+
+    def read_trainval_machine_labels(self):
+        """Read the training labels annotated by machines."""
+        machine_train_labels = {}
+        file_path = os.path.join(self.data_path, 'misc', 'train_machine_labels.csv')
+        contents = read_csv(file_path)
+        class_map = self.get_class_map_dict()
+        for item in contents:
+            image_id = item[0]
+            source = item[1]
+            label_code = item[2]
+            confidence = item[3]
+            if label_code in class_map:
+                if not machine_train_labels.get(image_id):
+                    machine_train_labels[image_id] = {'labels': [], 'confidences': []}
+                else:
+                    machine_train_labels[image_id]['labels'].append(label_code)
+                    machine_train_labels[image_id]['confidences'].append(confidence)
+        return machine_train_labels
+
+    def read_trainval_bbox_labels(self):
+        """Read the bbox training labels provided by open images."""
+        bbox_train_labels = {}
+        file_path = os.path.join(self.data_path, 'misc', 'train_bounding_boxes.csv')
+        contents = read_csv(file_path)
+        class_map = self.get_class_map_dict()
+        for item in contents:
+            image_id = item[0]
+            source = item[1]
+            label_code = item[2]
+            confidence = item[3]
+            if label_code in class_map:
+                if not bbox_train_labels.get(image_id):
+                    bbox_train_labels[image_id] = {'labels': [], 'confidences': []}
+                else:
+                    bbox_train_labels[image_id]['labels'].append(label_code)
+                    bbox_train_labels[image_id]['confidences'].append(confidence)
+        return bbox_train_labels
 
     def get_test_image_list(self):
         """Get list of paths to test images."""
@@ -160,6 +235,22 @@ class IncImagesDataset:
             for item in train_image_list:
                 f.write("%s\n" % item)
 
+    def merge_labels(self, human_label, machine_label, bbox_label):
+        """Merge list of all annotations."""
+        merged_label = {'labels': [], 'confidences': []}
+        for idx, item in enumerate(human_label['labels']):
+            merged_label['labels'].append(item)
+            merged_label['confidences'].append(human_label['confidences'][idx])
+        for idx, item in enumerate(bbox_label['labels']):
+            if not item in merged_label['labels']:
+                merged_label['labels'].append(item)
+                merged_label['confidences'].append(bbox_label['confidences'][idx])
+        for idx, item in enumerate(machine_label['labels']):
+            if not item in merged_label['labels']:
+                merged_label['labels'].append(item)
+                merged_label['confidences'].append(machine_label['confidences'][idx])
+        return merged_label
+
     def __getitem__(self, index):
         """Get one item for data loading."""
         if self.mode == 'train':
@@ -172,21 +263,27 @@ class IncImagesDataset:
         img = self.transform(*[img])
         image_id = image_path.split('/')[-1].split('.')[0]
         if self.mode == 'train' or 'val':
-            label = self.trainval_human_labels.get(image_id, {'labels': [None]})
+            label_human = self.trainval_human_labels.get(image_id,
+                                                         {'labels': [None], 'confidences': [None]})
+            label_machine = self.trainval_machine_labels.get(image_id,
+                                                             {'labels': [None], 'confidences': [None]})
+            label_bbox = self.trainval_bbox_labels.get(image_id,
+                                                       {'labels': [None], 'confidences': [None]})
+            label = self.merge_labels(label_human, label_machine, label_bbox)
         elif self.mode == 'test':
             label = self.test_labels[image_id]
-        label = label['labels']
         one_hot = self.label_to_one_hot(label)
         return img, one_hot
 
     def label_to_one_hot(self, labels):
         """Convert string of labels to one-hot vector."""
         one_hot = np.zeros(self.n_trainable_classes)
-        for label in labels:
+        for idx, label in enumerate(labels['labels']):
             # mapped to trainable classes
             label_index = self.label_map.get(label, None)
+            label_confidence = labels['confidences'][idx]
             if label_index is not None:
-                one_hot[label_index] = 1
+                one_hot[label_index] = label_confidence
         return one_hot
 
 
@@ -222,7 +319,7 @@ class Trainer:
         LOGGER.info("Preparing model ...")
         self.model = Net(num_classes=self.num_classes).to(device)
         LOGGER.info("Preparing optimizer ...")
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1,
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01,
                                          momentum=0.9)
 
     def prepare_loaders(self):
@@ -247,15 +344,20 @@ class Trainer:
                                   transform=pre_process_val, mode='val')
         testset = IncImagesDataset('/staging/inc_images',
                                    transform=pre_process_test, mode='test')
-        self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=128,
+        self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
                                                        collate_fn=custom_collate,
                                                        shuffle=True, num_workers=8)
-        self.valloader = torch.utils.data.DataLoader(valset, batch_size=64,
+        self.valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size,
                                                      collate_fn=custom_collate,
                                                      shuffle=False, num_workers=4)
-        self.testloader = torch.utils.data.DataLoader(testset, batch_size=64,
+        self.testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
                                                       collate_fn=custom_collate,
                                                       shuffle=False, num_workers=4)
+
+    def lower_lr(self):
+        """Decrease learning rate by a factor of 10."""
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] /= 10
 
     def train(self, epoch=0):
         """Train model."""
@@ -263,6 +365,7 @@ class Trainer:
         self.model.train()
         train_loss = 0
         score = 0
+        n_batches = int(len(self.trainloader.dataset) / args.batch_size)
         for batch_idx, (inputs, targets) in enumerate(self.trainloader):
             inputs, targets = inputs.to(device), targets.to(device)
             self.optimizer.zero_grad()
@@ -272,8 +375,10 @@ class Trainer:
             self.optimizer.step()
             train_loss += loss.item()
             score += compute_f_score(outputs, targets).item()
-            LOGGER.info("Loss: %.3f | F2-Score: %.3f" % (train_loss/(batch_idx+1),
-                                                         score/(batch_idx+1)))
+            LOGGER.info("Batches done: {}/{} | Loss: {:03f} | F2-Score: {:03f}".format(batch_idx+1,
+                                                                                       n_batches,
+                                                                                       train_loss/(batch_idx+1),
+                                                                                       score/(batch_idx+1)))
 
     def test(self, epoch=0, val=False):
         """Test model."""
@@ -286,15 +391,19 @@ class Trainer:
             loader = self.testloader
         test_loss = 0
         score = 0
+        n_batches = int(len(loader.dataset) / args.batch_size)
         with torch.no_grad():
             for batch_idx, (inputs, targets) in enumerate(loader):
                 inputs, targets = inputs.to(device), targets.to(device)
                 outputs = self.model(inputs)
+
                 loss = F.binary_cross_entropy(outputs, targets)
                 test_loss += loss.item()
                 score += compute_f_score(outputs, targets).item()
-                LOGGER.info("Loss: %.3f | F2-Score: %.3f" % (test_loss/(batch_idx+1),
-                                                             score/(batch_idx+1)))
+                LOGGER.info("Batches done: {}/{} | Loss: {:04f} | F2-Score: {:03f}".format(batch_idx+1,
+                                                                                           n_batches,
+                                                                                           test_loss/(batch_idx+1),
+                                                                                           score/(batch_idx+1)))
         return score
 
 
@@ -318,3 +427,5 @@ if __name__ == '__main__':
                          'state_dict': trainer.model.state_dict()},
                         'checkpoints',
                         backup_as_best=is_best)
+        if (epoch + 1) % 10:
+            trainer.lower_lr()

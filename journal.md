@@ -22,6 +22,11 @@
 
 * `32,580` images
 
+### Relevant papers
+
+* http://cvlab.cse.msu.edu/pdfs/DoConvolutionalNeuralNetworksLearnClassHierarchy.pdf
+
+* https://www.cv-foundation.org/openaccess/content_iccv_2015/papers/Yan_HD-CNN_Hierarchical_Deep_ICCV_2015_paper.pdf
 
 
 ### Tasks:
