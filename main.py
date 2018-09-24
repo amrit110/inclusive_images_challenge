@@ -1,6 +1,7 @@
 """Main script for inclusive images challenge."""
 
 import argparse, os, glob, random, collections, copy
+import pandas as pd
 import logging
 from PIL import Image
 import pickle
@@ -36,27 +37,37 @@ setup_logging(log_path=log_file, logger=LOGGER)
 class IncImagesDataset:
     """Dataset for the challenge."""
 
-    def __init__(self, data_path, mode='train', transform=None, cache_dir='cache'):
+    def __init__(self, data_path, mode='train', transform=None, cache_dir='cache',
+                 n_trainable_subset=None):
         """Constructor."""
         self.data_path = data_path
         self.mode = mode
         self.transform = transform
         self.cache_dir = cache_dir
-        cache_exists = self.load_labels_from_cache()
-        if not cache_exists:
-            LOGGER.info("Creating label dicts, this takes a few minutes ...")
-            self.trainval_human_labels = self.read_trainval_human_labels()
-            self.trainval_machine_labels = self.read_trainval_machine_labels()
-            self.trainval_bbox_labels = self.read_trainval_bbox_labels()
-            self.save_labels_to_cache()
+        self.n_trainable_subset = n_trainable_subset
+        if mode != 'test':
+            self.train_images, self.val_images = self.get_train_val_split()
+            cache_exists = self.load_labels_from_cache()
+            if not cache_exists:
+                LOGGER.info("Creating label dicts, this takes a few minutes ...")
+                self.trainval_human_labels = self.read_trainval_human_labels()
+                self.trainval_machine_labels = self.read_trainval_machine_labels()
+                self.trainval_bbox_labels = self.read_trainval_bbox_labels()
+                self.save_labels_to_cache()
         self.test_labels = self.read_tuning_labels_stage_1()
-        self.train_images, self.val_images = self.get_train_val_split()
         self.label_map, self.reverse_label_map = self.get_label_map()
         self.n_trainable_classes = len(self.label_map)
-        if mode == 'train':
+        # Choose if we wish to train on all classes or a subset of the most frequent classes
+        if self.n_trainable_subset is None:
+            self.n_trainable_subset = self.n_trainable_classes
+        self.classes_subset = self.get_n_most_frequent_classes(self.n_trainable_subset)
+        if mode != 'test':
+            # Remove samples which don't have a trainable class
+            self.filter_set_based_on_trainable_classes(set='train')
+            self.filter_set_based_on_trainable_classes(set='val')
             LOGGER.info("No. of train images: {}, val images: {}".format(len(self.train_images),
                                                                          len(self.val_images)))
-            LOGGER.info("No. of trainable classes: {}".format(self.n_trainable_classes))
+            LOGGER.info("No. of trainable classes: {}".format(self.n_trainable_subset))
         self.test_images = self.get_test_image_list()
         if mode == 'test':
             LOGGER.info("No. of test images: {}".format(len(self.test_images)))
@@ -113,6 +124,36 @@ class IncImagesDataset:
             train_images = trainval_images[0:int(0.8 * len_trainval_set)]
             val_images = trainval_images[int(0.8 * len_trainval_set):]
         return train_images, val_images
+
+    def filter_set_based_on_trainable_classes(self, set='train'):
+        """Remove samples if they don't contain a trainable class."""
+        filtered_list = []
+        if set == 'train':
+            filter_list = self.train_images
+        elif set == 'val':
+            filter_list = self.val_images
+        n_samples_original_set = len(filter_list)
+        for image_path in filter_list:
+            image_id = image_path.split('/')[-1].split('.')[0]
+            label_human = self.trainval_human_labels.get(image_id,
+                                                         {'labels': [None], 'confidences': [None]})
+            label_machine = self.trainval_machine_labels.get(image_id,
+                                                             {'labels': [None], 'confidences': [None]})
+            label_bbox = self.trainval_bbox_labels.get(image_id,
+                                                       {'labels': [None], 'confidences': [None]})
+            label = self.merge_labels(label_human, label_machine, label_bbox)
+            for lab in label['labels']:
+                if lab in self.classes_subset:
+                    filtered_list.append(image_path)
+        if set == 'train':
+            self.train_images = filtered_list
+        elif set == 'val':
+            self.val_images = filtered_list
+        n_samples_filtered = len(filtered_list)
+        n_samples_removed = n_samples_original_set - n_samples_filtered
+        LOGGER.info("Size of filtered {} set: {}, {} samples removed".format(set,
+                                                                             n_samples_filtered,
+                                                                             n_samples_removed))
 
     def get_class_map_dict(self):
         """Read the class descriptions to a dict."""
@@ -221,6 +262,20 @@ class IncImagesDataset:
             tuning_labels[image_id] = labels
         return tuning_labels
 
+    def get_n_most_frequent_classes(self, n_classes):
+        """Get most frequent classes from the tuning set."""
+        labels_freq = {}
+        for key, item in self.test_labels.items():
+            for label in item:
+                if not label in labels_freq:
+                    labels_freq[label] = 0
+                else:
+                    labels_freq[label] += 1
+        label_ids = list(labels_freq.keys())
+        label_freqs = list(labels_freq.values())
+        label_ids = list(reversed([x for _, x in sorted(zip(label_freqs, label_ids))]))
+        return label_ids[0:n_classes]
+
     def write_trainval_image_list(self):
         """Get list of paths to train images, write them to txt file."""
         train_image_list = []
@@ -262,7 +317,7 @@ class IncImagesDataset:
         img = Image.open(image_path)
         img = self.transform(*[img])
         image_id = image_path.split('/')[-1].split('.')[0]
-        if self.mode == 'train' or 'val':
+        if self.mode != 'test':
             label_human = self.trainval_human_labels.get(image_id,
                                                          {'labels': [None], 'confidences': [None]})
             label_machine = self.trainval_machine_labels.get(image_id,
@@ -270,20 +325,22 @@ class IncImagesDataset:
             label_bbox = self.trainval_bbox_labels.get(image_id,
                                                        {'labels': [None], 'confidences': [None]})
             label = self.merge_labels(label_human, label_machine, label_bbox)
-        elif self.mode == 'test':
-            label = self.test_labels[image_id]
-        one_hot = self.label_to_one_hot(label)
-        return img, one_hot
+        else:
+            label = self.test_labels.get(image_id, [None])
+            label = {'labels': label, 'confidences': [1] * len(label)}
+        one_hot = self.label_to_vector(label)
+        return img, one_hot, image_id
 
-    def label_to_one_hot(self, labels):
-        """Convert string of labels to one-hot vector."""
+    def label_to_vector(self, labels):
+        """Convert string of labels to vector."""
         one_hot = np.zeros(self.n_trainable_classes)
         for idx, label in enumerate(labels['labels']):
             # mapped to trainable classes
-            label_index = self.label_map.get(label, None)
-            label_confidence = labels['confidences'][idx]
-            if label_index is not None:
-                one_hot[label_index] = label_confidence
+            if label in self.classes_subset:
+                label_index = self.label_map.get(label, None)
+                label_confidence = labels['confidences'][idx]
+                if label_index is not None:
+                    one_hot[label_index] = label_confidence
         return one_hot
 
 
@@ -310,17 +367,42 @@ class Net(nn.Module):
 
 
 class Trainer:
-    """Trainer."""
+    """Trainer.
 
-    def __init__(self):
+    Attributes:
+        data_path (str): path to dataset
+        n_trainable_subset (int): number of most frequent classes to train on
+
+    """
+
+    def __init__(self, data_path=None, submissions_path='submissions',
+                 n_trainable_subset=None):
         """Constructor."""
+        self.data_path = data_path
+        self.n_trainable_subset = n_trainable_subset
+        self.submission = self.load_sample_submission()
+        self.tuning_labels = self.load_tuning_labels_stage_1()
+        self.submissions_path = submissions_path
+        os.makedirs(self.submissions_path, exist_ok=True)
         LOGGER.info("Preparing data loaders ...")
         self.prepare_loaders()
         LOGGER.info("Preparing model ...")
         self.model = Net(num_classes=self.num_classes).to(device)
         LOGGER.info("Preparing optimizer ...")
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01,
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1,
                                          momentum=0.9)
+
+    def load_sample_submission(self):
+        """Load sample submission csv file."""
+        file_path = os.path.join(self.data_path, 'misc', 'stage_1_sample_submission.csv')
+        submission = pd.read_csv(file_path, index_col='image_id')
+        return submission
+
+    def load_tuning_labels_stage_1(self):
+        """Load the tuning labels (subset of testset)."""
+        file_path = os.path.join(self.data_path, 'misc', 'tuning_labels.csv')
+        tuning_labels = pd.read_csv(file_path, names=['id', 'labels'], index_col=['id'])
+        return tuning_labels
 
     def prepare_loaders(self):
         """Prepare data loaders."""
@@ -337,13 +419,20 @@ class Trainer:
                                                transforms.ToTensor(),
                                                transforms.Normalize((0.4561, 0.4303, 0.3950),
                                                                     (0.1257, 0.1236, 0.1281))])
-        trainset = IncImagesDataset('/staging/inc_images',
-                                    transform=pre_process_train, mode='train')
+        trainset = IncImagesDataset(self.data_path,
+                                    transform=pre_process_train,
+                                    mode='train',
+                                    n_trainable_subset=self.n_trainable_subset)
+        # just grab these from the dataset for now
         self.num_classes = trainset.n_trainable_classes
-        valset = IncImagesDataset('/staging/inc_images',
-                                  transform=pre_process_val, mode='val')
-        testset = IncImagesDataset('/staging/inc_images',
-                                   transform=pre_process_test, mode='test')
+        self.reverse_label_map = trainset.reverse_label_map
+        valset = IncImagesDataset(self.data_path,
+                                  transform=pre_process_val,
+                                  mode='val',
+                                  n_trainable_subset=self.n_trainable_subset)
+        testset = IncImagesDataset(self.data_path,
+                                   transform=pre_process_test,
+                                   mode='test')
         self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
                                                        collate_fn=custom_collate,
                                                        shuffle=True, num_workers=8)
@@ -366,7 +455,7 @@ class Trainer:
         train_loss = 0
         score = 0
         n_batches = int(len(self.trainloader.dataset) / args.batch_size)
-        for batch_idx, (inputs, targets) in enumerate(self.trainloader):
+        for batch_idx, (inputs, targets, _) in enumerate(self.trainloader):
             inputs, targets = inputs.to(device), targets.to(device)
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
@@ -380,7 +469,7 @@ class Trainer:
                                                                                        train_loss/(batch_idx+1),
                                                                                        score/(batch_idx+1)))
 
-    def test(self, epoch=0, val=False):
+    def test(self, epoch=0, val=False, save_submission=False):
         """Test model."""
         self.model.eval()
         if val:
@@ -393,10 +482,9 @@ class Trainer:
         score = 0
         n_batches = int(len(loader.dataset) / args.batch_size)
         with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(loader):
+            for batch_idx, (inputs, targets, image_ids) in enumerate(loader):
                 inputs, targets = inputs.to(device), targets.to(device)
                 outputs = self.model(inputs)
-
                 loss = F.binary_cross_entropy(outputs, targets)
                 test_loss += loss.item()
                 score += compute_f_score(outputs, targets).item()
@@ -404,7 +492,29 @@ class Trainer:
                                                                                            n_batches,
                                                                                            test_loss/(batch_idx+1),
                                                                                            score/(batch_idx+1)))
+                if save_submission:
+                    preds = self.convert_outputs_to_label_predictions(outputs)
+                    for idx, image_id in enumerate(image_ids):
+                        self.submission[image_id] = preds[idx]
+        if save_submission:
+            self.submission.update(self.tuning_labels)
+            submission_file_path = os.path.join(self.submissions_path,
+                                                'submission_epoch_{}.csv'.epoch(epoch))
+            self.submission.to_csv(submission_file_path)
+
         return score
+
+    def convert_outputs_to_label_predictions(self, outputs, threshold=0.25):
+        """Convert output predictions to label codes."""
+        label_preds = []
+        preds = (outputs > threshold).cpu().numpy()
+        for idx in range(preds.shape[0]):
+            label_pred = []
+            pred_indices = np.where(preds[idx] == 0)[0]
+            for ind in pred_indices:
+                label_pred.append(self.reverse_label_map[ind])
+            label_preds.append(' '.join(label_pred))
+        return label_preds
 
 
 if __name__ == '__main__':
@@ -413,13 +523,13 @@ if __name__ == '__main__':
         cudnn.benchmark = True
     os.environ['TORCH_HOME'] = os.path.join(os.path.abspath(os.path.dirname(__file__)),
                                             'torchvision')
-    trainer = Trainer()
+    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=100)
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
     for epoch in range(50):
         trainer.train()
         trainer.test(val=True)
-        score = trainer.test()
+        score = trainer.test(save_submission=True)
         if score > best_score:
             is_best = True
             best_score = score

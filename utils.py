@@ -9,14 +9,16 @@ LOG_FORMAT = '%(asctime)-15s %(levelname)-5s %(name)-15s - %(message)s'
 
 def custom_collate(batch):
     """Create custom collate fn to check input size."""
-    inputs, targets = [], []
+    inputs, targets, image_ids = [], [], []
     for item in batch:
         if item[0].size(0) == 3:
             inputs.append(np.expand_dims(item[0], 0))
             targets.append(np.expand_dims(item[1], 0))
+            if len(item) == 3: # hacky check to see if image_ids are there
+                image_ids.append(item[2])
     inputs = torch.from_numpy(np.concatenate(inputs)).float()
     targets = torch.from_numpy(np.concatenate(targets)).float()
-    return inputs, targets
+    return inputs, targets, image_ids
 
 
 def compute_f_score(probs, label, threshold=0.25, beta=2):
