@@ -21,7 +21,7 @@ from utils import custom_collate
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--batch-size', default=32, type=float, help='batch size')
-parser.add_argument('--exp_name', default='inclusive_images_challenge', type=str,
+parser.add_argument('--exp_name', default='inclusive_images_challenge_1', type=str,
                     help='name of experiment')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 args = parser.parse_args()
@@ -45,7 +45,7 @@ class IncImagesDataset:
         self.transform = transform
         self.cache_dir = cache_dir
         self.n_trainable_subset = n_trainable_subset
-        if mode != 'test':
+        if mode != 'test' and mode != 'finetune':
             self.train_images, self.val_images = self.get_train_val_split()
             cache_exists = self.load_labels_from_cache()
             if not cache_exists:
@@ -55,19 +55,22 @@ class IncImagesDataset:
                 self.trainval_bbox_labels = self.read_trainval_bbox_labels()
                 self.save_labels_to_cache()
         self.test_labels = self.read_tuning_labels_stage_1()
+        self.fine_tune_samples = list(self.test_labels.keys())
         self.label_map, self.reverse_label_map = self.get_label_map()
         self.n_trainable_classes = len(self.label_map)
         # Choose if we wish to train on all classes or a subset of the most frequent classes
         if self.n_trainable_subset is None:
             self.n_trainable_subset = self.n_trainable_classes
-        self.classes_subset = self.get_n_most_frequent_classes(self.n_trainable_subset)
-        if mode != 'test':
+        # NOTE: self.n_trainable_subset means different things for the below functions
+        # self.classes_subset = self.get_n_most_frequent_classes(self.n_trainable_subset)
+        if mode != 'test' and mode != 'finetune':
+            self.classes_subset = self.get_overlap_classes(self.n_trainable_subset)
             # Remove samples which don't have a trainable class
             self.filter_set_based_on_trainable_classes(set='train')
             self.filter_set_based_on_trainable_classes(set='val')
             LOGGER.info("No. of train images: {}, val images: {}".format(len(self.train_images),
                                                                          len(self.val_images)))
-            LOGGER.info("No. of trainable classes: {}".format(self.n_trainable_subset))
+            LOGGER.info("No. of trainable classes: {}".format(len(self.classes_subset)))
         self.test_images = self.get_test_image_list()
         if mode == 'test':
             LOGGER.info("No. of test images: {}".format(len(self.test_images)))
@@ -113,6 +116,8 @@ class IncImagesDataset:
             return len(self.val_images)
         elif self.mode == 'test':
             return len(self.test_images)
+        elif self.mode == 'finetune':
+            return len(self.fine_tune_samples)
 
     def get_train_val_split(self):
         """Split training set for competition to train/val."""
@@ -278,6 +283,37 @@ class IncImagesDataset:
         label_ids = list(reversed([x for _, x in sorted(zip(label_freqs, label_ids))]))
         return label_ids[0:n_classes]
 
+    def get_overlap_classes(self, n_classes):
+        """Get the overlapped classes between finetune set and training set."""
+        finetune_label_ids = self.get_labelids_sorted_by_freq(self.test_labels, test=True)
+        finetune_label_ids = finetune_label_ids[0:n_classes]
+        training_labels_freq = {}
+        _ = self.get_labelids_sorted_by_freq(self.trainval_human_labels, training_labels_freq)
+        _ = self.get_labelids_sorted_by_freq(self.trainval_bbox_labels, training_labels_freq)
+        training_label_ids = self.get_labelids_sorted_by_freq(self.trainval_machine_labels,
+                                                              training_labels_freq)
+        overlap_ids = set(training_label_ids).intersection(finetune_label_ids)
+        return overlap_ids
+
+    def get_labelids_sorted_by_freq(self, label_dict, labels_freq=None, test=False):
+        """Get the label ids based on frequency of occurence."""
+        if labels_freq is None:
+            labels_freq = {}
+        for key, item in label_dict.items():
+            if test:
+                label_list = item
+            else:
+                label_list = item['labels']
+            for label in label_list:
+                if not label in labels_freq:
+                    labels_freq[label] = 0
+                else:
+                    labels_freq[label] += 1
+        label_ids = list(labels_freq.keys())
+        label_freqs = list(labels_freq.values())
+        label_ids = list(reversed([x for _, x in sorted(zip(label_freqs, label_ids))]))
+        return label_ids
+
     def write_trainval_image_list(self):
         """Get list of paths to train images, write them to txt file."""
         train_image_list = []
@@ -316,10 +352,14 @@ class IncImagesDataset:
             image_path = self.val_images[index]
         elif self.mode == 'test':
             image_path = self.test_images[index]
+        elif self.mode == 'finetune':
+            image_id = self.fine_tune_samples[index]
+            image_path = os.path.join(self.data_path, 'misc',
+                                      'stage_1_test_images', image_id + '.jpg')
         img = Image.open(image_path)
         img = self.transform(*[img])
         image_id = image_path.split('/')[-1].split('.')[0]
-        if self.mode != 'test':
+        if self.mode == 'train' or self.mode == 'val':
             label_human = self.trainval_human_labels.get(image_id,
                                                          {'labels': [None], 'confidences': [None]})
             label_machine = self.trainval_machine_labels.get(image_id,
@@ -391,8 +431,9 @@ class Trainer:
         LOGGER.info("Preparing model ...")
         self.model = Net(num_classes=self.num_classes).to(device)
         LOGGER.info("Preparing optimizer ...")
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1,
-                                         momentum=0.9)
+        # self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1,
+        #                                  momentum=0.9)
+        self.optimizer = torch.optim.Adam(self.model.parameters())
 
     def load_sample_submission(self):
         """Load sample submission csv file."""
@@ -435,6 +476,9 @@ class Trainer:
         testset = IncImagesDataset(self.data_path,
                                    transform=pre_process_test,
                                    mode='test')
+        finetuneset = IncImagesDataset(self.data_path,
+                                       transform=pre_process_train,
+                                       mode='finetune')
         self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
                                                        collate_fn=custom_collate,
                                                        shuffle=True, num_workers=8)
@@ -444,6 +488,9 @@ class Trainer:
         self.testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
                                                       collate_fn=custom_collate,
                                                       shuffle=False, num_workers=4)
+        self.finetuneloader = torch.utils.data.DataLoader(finetuneset, batch_size=args.batch_size,
+                                                          collate_fn=custom_collate,
+                                                          shuffle=True, num_workers=8)
 
     def lower_lr(self):
         """Decrease learning rate by a factor of 10."""
@@ -461,7 +508,28 @@ class Trainer:
             inputs, targets = inputs.to(device), targets.to(device)
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
-            loss = F.binary_cross_entropy(outputs, targets)
+            loss = F.binary_cross_entropy(outputs, targets, reduction='none').sum() / args.batch_size
+            loss.backward()
+            self.optimizer.step()
+            train_loss += loss.item()
+            score += compute_f_score(outputs, targets).item()
+            LOGGER.info("Batches done: {}/{} | Loss: {:03f} | F2-Score: {:03f}".format(batch_idx+1,
+                                                                                       n_batches,
+                                                                                       train_loss/(batch_idx+1),
+                                                                                       score/(batch_idx+1)))
+
+    def finetune(self, epoch=0):
+        """Finetune model."""
+        LOGGER.info("Finetune epoch: {}".format(epoch))
+        self.model.train()
+        train_loss = 0
+        score = 0
+        n_batches = int(len(self.finetuneloader.dataset) / args.batch_size)
+        for batch_idx, (inputs, targets, _) in enumerate(self.finetuneloader):
+            inputs, targets = inputs.to(device), targets.to(device)
+            self.optimizer.zero_grad()
+            outputs = self.model(inputs)
+            loss = F.binary_cross_entropy(outputs, targets, reduction='none').sum() / args.batch_size
             loss.backward()
             self.optimizer.step()
             train_loss += loss.item()
@@ -487,7 +555,7 @@ class Trainer:
             for batch_idx, (inputs, targets, image_ids) in enumerate(loader):
                 inputs, targets = inputs.to(device), targets.to(device)
                 outputs = self.model(inputs)
-                loss = F.binary_cross_entropy(outputs, targets)
+                loss = F.binary_cross_entropy(outputs, targets, reduction='none').sum() / args.batch_size
                 test_loss += loss.item()
                 score += compute_f_score(outputs, targets).item()
                 LOGGER.info("Batches done: {}/{} | Loss: {:04f} | F2-Score: {:03f}".format(batch_idx+1,
@@ -502,7 +570,7 @@ class Trainer:
         if save_submission:
             self.submission.update(self.tuning_labels)
             submission_file_path = os.path.join(self.submissions_path,
-                                                'submission_epoch_{}.csv'.format(epoch))
+                                                'submission_epoch_with_finetune_{}.csv'.format(epoch))
             self.submission.to_csv(submission_file_path)
 
         return score
@@ -530,15 +598,16 @@ if __name__ == '__main__':
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
     for epoch in range(25):
-        trainer.train()
-        trainer.test(val=True)
-        score = trainer.test(save_submission=True)
+        trainer.train(epoch=epoch)
+        trainer.finetune(epoch=epoch)
+        trainer.test(val=True, epoch=epoch)
+        score = trainer.test(epoch=epoch, save_submission=True)
         if score > best_score:
             is_best = True
             best_score = score
         save_checkpoint({'epoch': epoch + 1, 'f2_score': score,
                          'state_dict': trainer.model.state_dict()},
-                        'checkpoints',
+                        'checkpoints_with_finetune',
                         backup_as_best=is_best)
         if (epoch + 1) % 5:
             trainer.lower_lr()

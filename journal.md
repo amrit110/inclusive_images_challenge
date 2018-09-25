@@ -31,6 +31,12 @@
 
 ### Tasks:
 
-- [ ] Train a baseline multi-class classifier, by simply cropping images to
-fixed dimension and predicting for all trainable classes. Use validation set, but
-also the stage-1 fine-tuning set as test set.
+- [x] Train a baseline multi-class classifier, by simply cropping images to
+fixed dimension and predicting for most frequent classes (10). Use only training set.
+
+* `submission_4.csv` - `0.299`
+
+- [ ] Same as above but with 32 and 100 frequent classes, also use finetune set.
+
+- [ ] Use mean-teacher based learning on the test-set, hence treating it as a
+semi-supervised learning/transfer learning problem.
