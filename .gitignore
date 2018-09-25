@@ -6,3 +6,4 @@ logs
 torchvision
 trainval_image_paths.txt
 cache
+submissions

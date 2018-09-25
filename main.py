@@ -144,7 +144,9 @@ class IncImagesDataset:
             label = self.merge_labels(label_human, label_machine, label_bbox)
             for lab in label['labels']:
                 if lab in self.classes_subset:
+                    # even if 1 label is found, add image and then exit loop
                     filtered_list.append(image_path)
+                    break
         if set == 'train':
             self.train_images = filtered_list
         elif set == 'val':
@@ -438,7 +440,7 @@ class Trainer:
                                                        shuffle=True, num_workers=8)
         self.valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size,
                                                      collate_fn=custom_collate,
-                                                     shuffle=False, num_workers=4)
+                                                     shuffle=False, num_workers=8)
         self.testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
                                                       collate_fn=custom_collate,
                                                       shuffle=False, num_workers=4)
@@ -492,14 +494,15 @@ class Trainer:
                                                                                            n_batches,
                                                                                            test_loss/(batch_idx+1),
                                                                                            score/(batch_idx+1)))
+
                 if save_submission:
                     preds = self.convert_outputs_to_label_predictions(outputs)
                     for idx, image_id in enumerate(image_ids):
-                        self.submission[image_id] = preds[idx]
+                        self.submission['labels'][image_id] = preds[idx]
         if save_submission:
             self.submission.update(self.tuning_labels)
             submission_file_path = os.path.join(self.submissions_path,
-                                                'submission_epoch_{}.csv'.epoch(epoch))
+                                                'submission_epoch_{}.csv'.format(epoch))
             self.submission.to_csv(submission_file_path)
 
         return score
@@ -510,7 +513,7 @@ class Trainer:
         preds = (outputs > threshold).cpu().numpy()
         for idx in range(preds.shape[0]):
             label_pred = []
-            pred_indices = np.where(preds[idx] == 0)[0]
+            pred_indices = np.where(preds[idx] == 1)[0]
             for ind in pred_indices:
                 label_pred.append(self.reverse_label_map[ind])
             label_preds.append(' '.join(label_pred))
@@ -526,7 +529,7 @@ if __name__ == '__main__':
     trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=100)
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
-    for epoch in range(50):
+    for epoch in range(25):
         trainer.train()
         trainer.test(val=True)
         score = trainer.test(save_submission=True)
@@ -537,5 +540,5 @@ if __name__ == '__main__':
                          'state_dict': trainer.model.state_dict()},
                         'checkpoints',
                         backup_as_best=is_best)
-        if (epoch + 1) % 10:
+        if (epoch + 1) % 5:
             trainer.lower_lr()
