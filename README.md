@@ -1,1 +1,1 @@
-# inclusive_images_challenge
+# Inclusive Image Challenge
