@@ -38,6 +38,6 @@ fixed dimension and predicting for most frequent classes (10). Use only training
 
 - [x] Same as above but with 32 and 100 frequent classes, also use finetune set.
 
-* * `submission_7.csv` - `0.386`
+* `submission_7.csv` - `0.386`
 
 - [ ] Use some semi-supervised learning algorithm to leverage on the unlabelled test set.
