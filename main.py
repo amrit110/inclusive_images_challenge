@@ -21,9 +21,12 @@ from utils import custom_collate
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--batch-size', default=32, type=float, help='batch size')
-parser.add_argument('--exp_name', default='inclusive_images_challenge_1', type=str,
+parser.add_argument('--exp_name', default='inclusive_images_challenge_100_finetune', type=str,
                     help='name of experiment')
-parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+parser.add_argument('--resume', '-r', action='store_true', default=True,
+                    help='resume from checkpoint')
+parser.add_argument('--checkpoint-path', default='./checkpoints_with_finetune_100/checkpoint.pth.tar', type=str,
+                    help='name of experiment')
 args = parser.parse_args()
 
 
@@ -62,9 +65,10 @@ class IncImagesDataset:
         if self.n_trainable_subset is None:
             self.n_trainable_subset = self.n_trainable_classes
         # NOTE: self.n_trainable_subset means different things for the below functions
-        # self.classes_subset = self.get_n_most_frequent_classes(self.n_trainable_subset)
+        self.classes_subset = self.get_n_most_frequent_classes(self.n_trainable_subset)
         if mode != 'test' and mode != 'finetune':
-            self.classes_subset = self.get_overlap_classes(self.n_trainable_subset)
+            # NOTE: Causes error, check later
+            # self.classes_subset = self.get_overlap_classes(self.n_trainable_subset)
             # Remove samples which don't have a trainable class
             self.filter_set_based_on_trainable_classes(set='train')
             self.filter_set_based_on_trainable_classes(set='val')
@@ -74,7 +78,7 @@ class IncImagesDataset:
         self.test_images = self.get_test_image_list()
         if mode == 'test':
             LOGGER.info("No. of test images: {}".format(len(self.test_images)))
-            LOGGER.info("No. of trainable classes: {}".format(self.n_trainable_classes))
+            LOGGER.info("No. of trainable classes: {}".format(len(self.classes_subset)))
 
     def load_labels_from_cache(self):
         """Load label dicts from cache."""
@@ -430,10 +434,21 @@ class Trainer:
         self.prepare_loaders()
         LOGGER.info("Preparing model ...")
         self.model = Net(num_classes=self.num_classes).to(device)
+        self.load_checkpoint()
         LOGGER.info("Preparing optimizer ...")
         # self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1,
         #                                  momentum=0.9)
         self.optimizer = torch.optim.Adam(self.model.parameters())
+
+    def load_checkpoint(self):
+        """Load checkpoint."""
+        if args.resume:
+            # Load checkpoint.
+            LOGGER.info('Resuming from checkpoint ...')
+            assert os.path.isfile(args.checkpoint_path), 'Error: no checkpoint found!'
+            checkpoint = torch.load(args.checkpoint_path)
+            state_dict = checkpoint['state_dict']
+            self.model.load_state_dict(state_dict)
 
     def load_sample_submission(self):
         """Load sample submission csv file."""
@@ -570,7 +585,7 @@ class Trainer:
         if save_submission:
             self.submission.update(self.tuning_labels)
             submission_file_path = os.path.join(self.submissions_path,
-                                                'submission_epoch_with_finetune_{}.csv'.format(epoch))
+                                                'submission_more_finetune_{}.csv'.format(epoch))
             self.submission.to_csv(submission_file_path)
 
         return score
@@ -598,16 +613,17 @@ if __name__ == '__main__':
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
     for epoch in range(25):
-        trainer.train(epoch=epoch)
+        # trainer.train(epoch=epoch)
         trainer.finetune(epoch=epoch)
-        trainer.test(val=True, epoch=epoch)
-        score = trainer.test(epoch=epoch, save_submission=True)
-        if score > best_score:
-            is_best = True
-            best_score = score
+        # trainer.test(val=True, epoch=epoch)
+        # score = trainer.test(epoch=epoch, save_submission=True)
+        # if score > best_score:
+        #     is_best = True
+        #     best_score = score
         save_checkpoint({'epoch': epoch + 1, 'f2_score': score,
                          'state_dict': trainer.model.state_dict()},
-                        'checkpoints_with_finetune',
+                        'checkpoints_more_finetune_100',
                         backup_as_best=is_best)
         if (epoch + 1) % 5:
             trainer.lower_lr()
+    score = trainer.test(epoch=epoch, save_submission=True)
