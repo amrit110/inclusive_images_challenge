@@ -40,4 +40,13 @@ fixed dimension and predicting for most frequent classes (10). Use only training
 
 * `submission_7.csv` - `0.386`
 
+- [x] Same as above but with 484 classes (present in finetune set), also use finetune set.
+
+* `submission_10.csv` - `0.404`
+
+- [x] Same as above but with 484 classes (present in finetune set), but use model predictions as pseudo-labels and 
+fine-tune further.
+
+* `submission_11.csv` - `0.435`
+
 - [ ] Use some semi-supervised learning algorithm to leverage on the unlabelled test set.

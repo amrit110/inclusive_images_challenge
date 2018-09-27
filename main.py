@@ -21,11 +21,11 @@ from utils import custom_collate
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--batch-size', default=32, type=float, help='batch size')
-parser.add_argument('--exp_name', default='inclusive_images_challenge_100_finetune', type=str,
+parser.add_argument('--exp_name', default='inclusive_images_challenge_pseudo_finetune', type=str,
                     help='name of experiment')
 parser.add_argument('--resume', '-r', action='store_true', default=True,
                     help='resume from checkpoint')
-parser.add_argument('--checkpoint-path', default='./checkpoints_with_finetune_100/checkpoint.pth.tar', type=str,
+parser.add_argument('--checkpoint-path', default='./checkpoints_484/checkpoint.pth.tar', type=str,
                     help='name of experiment')
 args = parser.parse_args()
 
@@ -64,8 +64,10 @@ class IncImagesDataset:
         # Choose if we wish to train on all classes or a subset of the most frequent classes
         if self.n_trainable_subset is None:
             self.n_trainable_subset = self.n_trainable_classes
+            self.classes_subset = list(self.label_map.keys())
+        else:
         # NOTE: self.n_trainable_subset means different things for the below functions
-        self.classes_subset = self.get_n_most_frequent_classes(self.n_trainable_subset)
+            self.classes_subset = self.get_n_most_frequent_classes(self.n_trainable_subset)
         if mode != 'test' and mode != 'finetune':
             # NOTE: Causes error, check later
             # self.classes_subset = self.get_overlap_classes(self.n_trainable_subset)
@@ -130,8 +132,8 @@ class IncImagesDataset:
             random.seed(500)
             random.shuffle(trainval_images)
             len_trainval_set = len(trainval_images)
-            train_images = trainval_images[0:int(0.8 * len_trainval_set)]
-            val_images = trainval_images[int(0.8 * len_trainval_set):]
+            train_images = trainval_images[0:int(1 * len_trainval_set)]
+            val_images = trainval_images[int(0.95 * len_trainval_set):]
         return train_images, val_images
 
     def filter_set_based_on_trainable_classes(self, set='train'):
@@ -265,7 +267,8 @@ class IncImagesDataset:
     def read_tuning_labels_stage_1(self):
         """Read the labels proved for tuning for stage-1 (test)."""
         tuning_labels = {}
-        file_path = os.path.join(self.data_path, 'misc', 'tuning_labels.csv')
+        # file_path = os.path.join(self.data_path, 'misc', 'tuning_labels.csv')
+        file_path = os.path.join('pseudo_labels.csv')
         contents = read_csv(file_path)
         for idx, item in enumerate(contents):
             image_id = item[0]
@@ -484,10 +487,10 @@ class Trainer:
         # just grab these from the dataset for now
         self.num_classes = trainset.n_trainable_classes
         self.reverse_label_map = trainset.reverse_label_map
-        valset = IncImagesDataset(self.data_path,
-                                  transform=pre_process_val,
-                                  mode='val',
-                                  n_trainable_subset=self.n_trainable_subset)
+        # valset = IncImagesDataset(self.data_path,
+        #                           transform=pre_process_val,
+        #                           mode='val',
+        #                           n_trainable_subset=self.n_trainable_subset)
         testset = IncImagesDataset(self.data_path,
                                    transform=pre_process_test,
                                    mode='test')
@@ -497,9 +500,9 @@ class Trainer:
         self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
                                                        collate_fn=custom_collate,
                                                        shuffle=True, num_workers=8)
-        self.valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size,
-                                                     collate_fn=custom_collate,
-                                                     shuffle=False, num_workers=8)
+        # self.valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size,
+        #                                              collate_fn=custom_collate,
+        #                                              shuffle=False, num_workers=8)
         self.testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
                                                       collate_fn=custom_collate,
                                                       shuffle=False, num_workers=4)
@@ -585,7 +588,7 @@ class Trainer:
         if save_submission:
             self.submission.update(self.tuning_labels)
             submission_file_path = os.path.join(self.submissions_path,
-                                                'submission_more_finetune_{}.csv'.format(epoch))
+                                                'submission_pseudo_finetune_{}.csv'.format(epoch))
             self.submission.to_csv(submission_file_path)
 
         return score
@@ -609,21 +612,22 @@ if __name__ == '__main__':
         cudnn.benchmark = True
     os.environ['TORCH_HOME'] = os.path.join(os.path.abspath(os.path.dirname(__file__)),
                                             'torchvision')
-    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=100)
+    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=484)
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
-    for epoch in range(25):
+    for epoch in range(2):
         # trainer.train(epoch=epoch)
         trainer.finetune(epoch=epoch)
+        trainer.lower_lr()
         # trainer.test(val=True, epoch=epoch)
         # score = trainer.test(epoch=epoch, save_submission=True)
         # if score > best_score:
         #     is_best = True
         #     best_score = score
-        save_checkpoint({'epoch': epoch + 1, 'f2_score': score,
-                         'state_dict': trainer.model.state_dict()},
-                        'checkpoints_more_finetune_100',
-                        backup_as_best=is_best)
-        if (epoch + 1) % 5:
-            trainer.lower_lr()
+        # save_checkpoint({'epoch': epoch + 1, 'f2_score': score,
+        #                  'state_dict': trainer.model.state_dict()},
+        #                 'checkpoints_all_trainable',
+        #                 backup_as_best=is_best)
+        # if (epoch + 1) % 5:
+            # trainer.lower_lr()
     score = trainer.test(epoch=epoch, save_submission=True)
