@@ -34,7 +34,12 @@ stage-1 will be bad.
 * Stage-1 results don't mean much unless the results come from only using the training set,
 and using minimal information from the finetuning set.
 
-*
+* Since label distributions between Stage-1 and Stage-2 will differ significantly, we can't
+restrict to use any label subset based on Stage-1 label distribution.
+
+<p float="left">
+  <img src="/plots/sample_geo_distribution.png" width="640" />   
+</p>
 
 ### Relevant papers
 
@@ -61,6 +66,15 @@ fixed dimension and predicting for most frequent classes (10). Use only training
 fine-tune further.
 
 * `submission_11.csv` - `0.435`
+
+
+- [x] Train on all allowed classes. No fine-tuning.  
+
+* `submission_16.csv` - `0.296`
+* This is the baseline general performance. Any technique applied, should be on top of this
+without using much knowledge from Stage-1 finetuning set.
+* Use more augmentations like random-crops, color jitters and brightness augs to improve this baseline.
+
 
 - [ ] Do error analysis on the fine-tuning images, to see where the classifier is struggling.
 Compute TPs, FPs and FNs, look at the images.

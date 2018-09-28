@@ -8,3 +8,5 @@ trainval_image_paths.txt
 cache
 submissions
 pseudo_labels.csv
+.DS_Store
+._*
