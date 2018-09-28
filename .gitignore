@@ -1,9 +1,10 @@
 .ipynb_checkpoints
 venv
 __pycache__
-checkpoints
+checkpoints*
 logs
 torchvision
 trainval_image_paths.txt
 cache
 submissions
+pseudo_labels.csv

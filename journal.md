@@ -22,11 +22,24 @@
 
 * `32,580` images
 
+### Problem Description
+
+* Improve generalisation of image classifiers to distributional shifts.
+
+* Distributional changes come from sampling images from different geographical regions.
+
+* Stage-1 and Stage-2 will be quite different distributions so fine-tuning much to the
+stage-1 will be bad.
+
+* Stage-1 results don't mean much unless the results come from only using the training set,
+and using minimal information from the finetuning set.
+
+*
+
 ### Relevant papers
 
-* http://cvlab.cse.msu.edu/pdfs/DoConvolutionalNeuralNetworksLearnClassHierarchy.pdf
-
-* https://www.cv-foundation.org/openaccess/content_iccv_2015/papers/Yan_HD-CNN_Hierarchical_Deep_ICCV_2015_paper.pdf
+* No Classification without Representation: Assessing Geodiversity Issues in
+Open Data Sets for the Developing World - https://arxiv.org/pdf/1711.08536.pdf
 
 
 ### Tasks:
@@ -36,17 +49,18 @@ fixed dimension and predicting for most frequent classes (10). Use only training
 
 * `submission_4.csv` - `0.299`
 
-- [x] Same as above but with 32 and 100 frequent classes, also use finetune set.
+- [x] Same as above but with 100 frequent classes, also use finetune set.
 
 * `submission_7.csv` - `0.386`
 
-- [x] Same as above but with 484 classes (present in finetune set), also use finetune set.
+- [x] Same as above but with 484 classes (present in finetune set), use finetune set.
 
 * `submission_10.csv` - `0.404`
 
-- [x] Same as above but with 484 classes (present in finetune set), but use model predictions as pseudo-labels and 
+- [x] Same as above but with 484 classes (present in finetune set), but use model predictions as pseudo-labels and
 fine-tune further.
 
 * `submission_11.csv` - `0.435`
 
-- [ ] Use some semi-supervised learning algorithm to leverage on the unlabelled test set.
+- [ ] Do error analysis on the fine-tuning images, to see where the classifier is struggling.
+Compute TPs, FPs and FNs, look at the images.

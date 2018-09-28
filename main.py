@@ -21,11 +21,11 @@ from utils import custom_collate
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--batch-size', default=32, type=float, help='batch size')
-parser.add_argument('--exp_name', default='inclusive_images_challenge_pseudo_finetune', type=str,
+parser.add_argument('--exp_name', default='inclusive_images_challenge_error_analysis', type=str,
                     help='name of experiment')
 parser.add_argument('--resume', '-r', action='store_true', default=True,
                     help='resume from checkpoint')
-parser.add_argument('--checkpoint-path', default='./checkpoints_484/checkpoint.pth.tar', type=str,
+parser.add_argument('--checkpoint-path', default='./checkpoints_all_trainable/checkpoint.pth.tar', type=str,
                     help='name of experiment')
 args = parser.parse_args()
 
@@ -267,8 +267,9 @@ class IncImagesDataset:
     def read_tuning_labels_stage_1(self):
         """Read the labels proved for tuning for stage-1 (test)."""
         tuning_labels = {}
-        # file_path = os.path.join(self.data_path, 'misc', 'tuning_labels.csv')
-        file_path = os.path.join('pseudo_labels.csv')
+        file_path = os.path.join(self.data_path, 'misc', 'tuning_labels.csv')
+        # NOTE: uncomment to use pseudo labels
+        # file_path = os.path.join('pseudo_labels.csv')
         contents = read_csv(file_path)
         for idx, item in enumerate(contents):
             image_id = item[0]
@@ -557,15 +558,19 @@ class Trainer:
                                                                                        train_loss/(batch_idx+1),
                                                                                        score/(batch_idx+1)))
 
-    def test(self, epoch=0, val=False, save_submission=False):
+    def test(self, epoch=0, val=False, save_submission=False, run_on_finetune=False):
         """Test model."""
         self.model.eval()
         if val:
             LOGGER.info("Val epoch: {}".format(epoch))
             loader = self.valloader
         else:
-            LOGGER.info("Test epoch: {}".format(epoch))
-            loader = self.testloader
+            if run_on_finetune:
+                LOGGER.info("Running on test set with labels, save predictions")
+                loader = self.finetuneloader
+            else:
+                LOGGER.info("Running on full test set, save predictions")
+                loader = self.testloader
         test_loss = 0
         score = 0
         n_batches = int(len(loader.dataset) / args.batch_size)
@@ -588,7 +593,7 @@ class Trainer:
         if save_submission:
             self.submission.update(self.tuning_labels)
             submission_file_path = os.path.join(self.submissions_path,
-                                                'submission_pseudo_finetune_{}.csv'.format(epoch))
+                                                'submission_{}.csv'.format(args.exp_name))
             self.submission.to_csv(submission_file_path)
 
         return score
@@ -612,15 +617,14 @@ if __name__ == '__main__':
         cudnn.benchmark = True
     os.environ['TORCH_HOME'] = os.path.join(os.path.abspath(os.path.dirname(__file__)),
                                             'torchvision')
-    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=484)
+    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=None)
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
-    for epoch in range(2):
+    for epoch in range(1):
         # trainer.train(epoch=epoch)
-        trainer.finetune(epoch=epoch)
-        trainer.lower_lr()
+        # trainer.finetune(epoch=epoch)
         # trainer.test(val=True, epoch=epoch)
-        # score = trainer.test(epoch=epoch, save_submission=True)
+        score = trainer.test(epoch=epoch, save_submission=True, run_on_finetune=True)
         # if score > best_score:
         #     is_best = True
         #     best_score = score
@@ -628,6 +632,6 @@ if __name__ == '__main__':
         #                  'state_dict': trainer.model.state_dict()},
         #                 'checkpoints_all_trainable',
         #                 backup_as_best=is_best)
-        # if (epoch + 1) % 5:
-            # trainer.lower_lr()
-    score = trainer.test(epoch=epoch, save_submission=True)
+    #     if (epoch + 1) % 2:
+    #         trainer.lower_lr()
+    # score = trainer.test(epoch=epoch, save_submission=True)
