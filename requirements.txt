@@ -5,3 +5,4 @@ pillow==5.2.0
 dask==0.19.1
 torch==0.4.1
 torchvision==0.2.1
+kaggle==1.4.7.1

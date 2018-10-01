@@ -78,3 +78,7 @@ without using much knowledge from Stage-1 finetuning set.
 
 - [ ] Do error analysis on the fine-tuning images, to see where the classifier is struggling.
 Compute TPs, FPs and FNs, look at the images.
+
+* It seems like precision is quite low, there are many predicted labels and hence FPs.
+This could be due to the highly noisy machine generated labels used for training. So, could be
+interesting to not use them and compare. Recall is weighted more, so it might also hurt the F2-score.
