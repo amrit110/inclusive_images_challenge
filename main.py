@@ -1,6 +1,7 @@
 """Main script for inclusive images challenge."""
 
 import argparse, os, glob, random, collections, copy
+import numbers
 import pandas as pd
 import logging
 from PIL import Image
@@ -21,11 +22,11 @@ from utils import custom_collate
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--batch-size', default=32, type=float, help='batch size')
-parser.add_argument('--exp_name', default='inclusive_images_challenge_error_analysis', type=str,
+parser.add_argument('--exp_name', default='inclusive_images_challenge', type=str,
                     help='name of experiment')
-parser.add_argument('--resume', '-r', action='store_true', default=True,
+parser.add_argument('--resume', '-r', action='store_true', default=False,
                     help='resume from checkpoint')
-parser.add_argument('--checkpoint-path', default='./checkpoints_all_trainable/checkpoint.pth.tar', type=str,
+parser.add_argument('--checkpoint-path', default='./checkpoints_all_trainable_with_machine_labels/checkpoint.pth.tar', type=str,
                     help='name of experiment')
 args = parser.parse_args()
 
@@ -36,6 +37,55 @@ log_file = os.path.join('logs', '{}.log'.format(args.exp_name))
 os.makedirs('logs', exist_ok=True)
 setup_logging(log_path=log_file, logger=LOGGER)
 
+
+class RandomCrop(object):
+    """Takes a random crop of a PIL.Image with given dimensions.
+
+    Attributes:
+        size (tuple/int): image dimension after cropping (height, weight)
+        , if a single integer i is passed, output dimension is (i,i)
+
+    """
+
+    def __init__(self, size):
+        """Constructor."""
+        if isinstance(size, numbers.Number):
+            self.size = (int(size), int(size))
+        else:
+            self.size = size
+
+    def __call__(self, img):
+        """Call random cropping function.
+
+        Args:
+            img (PIL.Image): image to be pre-processed
+
+        Returns:
+            list: pre-processed data-point containing image, and label if inputted
+
+        """
+        width, height = img.size
+        target_height, target_width = self.size
+        if height < target_height:
+            img = img.resize((width, target_height), resample=Image.BICUBIC)
+            width, height = img.size
+            if label is not None:
+                for i in range(len(label)):
+                    label[i] = label[i].resize((width, target_height), resample=Image.NEAREST)
+        if width < target_width:
+            img = img.resize((target_width, height), resample=Image.BICUBIC)
+            width, height = img.size
+            if label is not None:
+                for i in range(len(label)):
+                    label[i] = label[i].resize((target_width, height), resample=Image.NEAREST)
+        if width == target_width and height == target_height:
+            return [img, label]
+        crop_width = random.randint(0, width - target_width)
+        crop_height = random.randint(0, height - target_height)
+        cropped_img = img.crop((crop_width, crop_height, crop_width + target_width,
+                                crop_height + target_height))
+
+        return cropped_img
 
 class IncImagesDataset:
     """Dataset for the challenge."""
@@ -55,6 +105,7 @@ class IncImagesDataset:
                 LOGGER.info("Creating label dicts, this takes a few minutes ...")
                 self.trainval_human_labels = self.read_trainval_human_labels()
                 self.trainval_machine_labels = self.read_trainval_machine_labels()
+                self.trainval_machine_labels = {}
                 self.trainval_bbox_labels = self.read_trainval_bbox_labels()
                 self.save_labels_to_cache()
         self.test_labels = self.read_tuning_labels_stage_1()
@@ -468,16 +519,17 @@ class Trainer:
 
     def prepare_loaders(self):
         """Prepare data loaders."""
-        pre_process_train = transforms.Compose([transforms.Resize((224, 224)),
+        pre_process_train = transforms.Compose([transforms.Resize((256, 256)),
                                                 transforms.RandomHorizontalFlip(),
+                                                RandomCrop((224, 224)),
                                                 transforms.ToTensor(),
                                                 transforms.Normalize((0.4561, 0.4303, 0.3950),
                                                                      (0.1257, 0.1236, 0.1281))])
-        pre_process_val = transforms.Compose([transforms.Resize((224, 224)),
+        pre_process_val = transforms.Compose([transforms.Resize((256, 256)),
                                               transforms.ToTensor(),
                                               transforms.Normalize((0.4561, 0.4303, 0.3950),
                                                                    (0.1257, 0.1236, 0.1281))])
-        pre_process_test = transforms.Compose([transforms.Resize((224, 224)),
+        pre_process_test = transforms.Compose([transforms.Resize((256, 256)),
                                                transforms.ToTensor(),
                                                transforms.Normalize((0.4561, 0.4303, 0.3950),
                                                                     (0.1257, 0.1236, 0.1281))])
@@ -509,7 +561,7 @@ class Trainer:
                                                       shuffle=False, num_workers=4)
         self.finetuneloader = torch.utils.data.DataLoader(finetuneset, batch_size=args.batch_size,
                                                           collate_fn=custom_collate,
-                                                          shuffle=True, num_workers=8)
+                                                          shuffle=False, num_workers=8)
 
     def lower_lr(self):
         """Decrease learning rate by a factor of 10."""
@@ -591,9 +643,9 @@ class Trainer:
                     for idx, image_id in enumerate(image_ids):
                         self.submission['labels'][image_id] = preds[idx]
         if save_submission:
-            self.submission.update(self.tuning_labels)
+            # self.submission.update(self.tuning_labels) # this is useless and fooling yourself
             submission_file_path = os.path.join(self.submissions_path,
-                                                'submission_{}.csv'.format(args.exp_name))
+                                                'submission_{}_{}.csv'.format(args.exp_name, epoch))
             self.submission.to_csv(submission_file_path)
 
         return score
@@ -620,18 +672,18 @@ if __name__ == '__main__':
     trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=None)
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
-    for epoch in range(1):
-        # trainer.train(epoch=epoch)
-        # trainer.finetune(epoch=epoch)
-        # trainer.test(val=True, epoch=epoch)
-        score = trainer.test(epoch=epoch, save_submission=True, run_on_finetune=True)
-        # if score > best_score:
-        #     is_best = True
-        #     best_score = score
-        # save_checkpoint({'epoch': epoch + 1, 'f2_score': score,
-        #                  'state_dict': trainer.model.state_dict()},
-        #                 'checkpoints_all_trainable',
-        #                 backup_as_best=is_best)
-    #     if (epoch + 1) % 2:
-    #         trainer.lower_lr()
-    # score = trainer.test(epoch=epoch, save_submission=True)
+    for epoch in range(10):
+        trainer.train(epoch=epoch)
+        trainer.finetune(epoch=epoch)
+        trainer.test(val=True, epoch=epoch)
+        score = trainer.test(epoch=epoch, run_on_finetune=True)
+        if score > best_score:
+            is_best = True
+            best_score = score
+        save_checkpoint({'epoch': epoch + 1, 'f2_score': score,
+                         'state_dict': trainer.model.state_dict()},
+                        'checkpoints_all_trainable',
+                        backup_as_best=is_best)
+        if (epoch + 1) % 5:
+            trainer.lower_lr()
+    score = trainer.test(epoch=110, save_submission=True)
