@@ -76,9 +76,18 @@ without using much knowledge from Stage-1 finetuning set.
 * Use more augmentations like random-crops, color jitters and brightness augs to improve this baseline.
 
 
-- [ ] Do error analysis on the fine-tuning images, to see where the classifier is struggling.
+- [x] Do error analysis on the fine-tuning images, to see where the classifier is struggling.
 Compute TPs, FPs and FNs, look at the images.
 
 * It seems like precision is quite low, there are many predicted labels and hence FPs.
 This could be due to the highly noisy machine generated labels used for training. So, could be
 interesting to not use them and compare. Recall is weighted more, so it might also hurt the F2-score.
+
+
+- [x] Train without using machine labels.
+
+* `submission_17.csv` - 0.191
+* Lower compared to using the machine labels, since the decrease in recall is more than any
+increase in precision.
+
+- [ ] Add augmentations and improve baseline.
