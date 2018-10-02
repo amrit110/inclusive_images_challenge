@@ -22,7 +22,7 @@ from utils import custom_collate
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--batch-size', default=32, type=float, help='batch size')
-parser.add_argument('--exp_name', default='inclusive_images_challenge', type=str,
+parser.add_argument('--exp_name', default='inclusive_images_challenge_without_machine_labels', type=str,
                     help='name of experiment')
 parser.add_argument('--resume', '-r', action='store_true', default=False,
                     help='resume from checkpoint')
@@ -87,11 +87,12 @@ class RandomCrop(object):
 
         return cropped_img
 
+
 class IncImagesDataset:
     """Dataset for the challenge."""
 
     def __init__(self, data_path, mode='train', transform=None, cache_dir='cache',
-                 n_trainable_subset=None):
+                 n_trainable_subset=None, reload_labels=False):
         """Constructor."""
         self.data_path = data_path
         self.mode = mode
@@ -101,7 +102,7 @@ class IncImagesDataset:
         if mode != 'test' and mode != 'finetune':
             self.train_images, self.val_images = self.get_train_val_split()
             cache_exists = self.load_labels_from_cache()
-            if not cache_exists:
+            if not cache_exists or reload_labels:
                 LOGGER.info("Creating label dicts, this takes a few minutes ...")
                 self.trainval_human_labels = self.read_trainval_human_labels()
                 self.trainval_machine_labels = self.read_trainval_machine_labels()
@@ -117,11 +118,9 @@ class IncImagesDataset:
             self.n_trainable_subset = self.n_trainable_classes
             self.classes_subset = list(self.label_map.keys())
         else:
-        # NOTE: self.n_trainable_subset means different things for the below functions
-            self.classes_subset = self.get_n_most_frequent_classes(self.n_trainable_subset)
+            self.classes_subset = self.get_n_most_frequent_classes(self.test_labels,
+                                                                   self.n_trainable_subset)
         if mode != 'test' and mode != 'finetune':
-            # NOTE: Causes error, check later
-            # self.classes_subset = self.get_overlap_classes(self.n_trainable_subset)
             # Remove samples which don't have a trainable class
             self.filter_set_based_on_trainable_classes(set='train')
             self.filter_set_based_on_trainable_classes(set='val')
@@ -328,10 +327,10 @@ class IncImagesDataset:
             tuning_labels[image_id] = labels
         return tuning_labels
 
-    def get_n_most_frequent_classes(self, n_classes):
-        """Get most frequent classes from the tuning set."""
+    def get_n_most_frequent_classes(self, label_set, n_classes):
+        """Get most frequent classes from the training / tuning set."""
         labels_freq = {}
-        for key, item in self.test_labels.items():
+        for key, item in label_set.items():
             for label in item:
                 if not label in labels_freq:
                     labels_freq[label] = 0
@@ -341,18 +340,6 @@ class IncImagesDataset:
         label_freqs = list(labels_freq.values())
         label_ids = list(reversed([x for _, x in sorted(zip(label_freqs, label_ids))]))
         return label_ids[0:n_classes]
-
-    def get_overlap_classes(self, n_classes):
-        """Get the overlapped classes between finetune set and training set."""
-        finetune_label_ids = self.get_labelids_sorted_by_freq(self.test_labels, test=True)
-        finetune_label_ids = finetune_label_ids[0:n_classes]
-        training_labels_freq = {}
-        _ = self.get_labelids_sorted_by_freq(self.trainval_human_labels, training_labels_freq)
-        _ = self.get_labelids_sorted_by_freq(self.trainval_bbox_labels, training_labels_freq)
-        training_label_ids = self.get_labelids_sorted_by_freq(self.trainval_machine_labels,
-                                                              training_labels_freq)
-        overlap_ids = set(training_label_ids).intersection(finetune_label_ids)
-        return overlap_ids
 
     def get_labelids_sorted_by_freq(self, label_dict, labels_freq=None, test=False):
         """Get the label ids based on frequency of occurence."""
@@ -477,13 +464,14 @@ class Trainer:
     """
 
     def __init__(self, data_path=None, submissions_path='submissions',
-                 n_trainable_subset=None):
+                 n_trainable_subset=None, reload_labels=False):
         """Constructor."""
         self.data_path = data_path
         self.n_trainable_subset = n_trainable_subset
         self.submission = self.load_sample_submission()
         self.tuning_labels = self.load_tuning_labels_stage_1()
         self.submissions_path = submissions_path
+        self.reload_labels = reload_labels
         os.makedirs(self.submissions_path, exist_ok=True)
         LOGGER.info("Preparing data loaders ...")
         self.prepare_loaders()
@@ -491,8 +479,6 @@ class Trainer:
         self.model = Net(num_classes=self.num_classes).to(device)
         self.load_checkpoint()
         LOGGER.info("Preparing optimizer ...")
-        # self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1,
-        #                                  momentum=0.9)
         self.optimizer = torch.optim.Adam(self.model.parameters())
 
     def load_checkpoint(self):
@@ -536,20 +522,24 @@ class Trainer:
         trainset = IncImagesDataset(self.data_path,
                                     transform=pre_process_train,
                                     mode='train',
-                                    n_trainable_subset=self.n_trainable_subset)
+                                    n_trainable_subset=self.n_trainable_subset,
+                                    reload_labels=self.reload_labels)
         # just grab these from the dataset for now
         self.num_classes = trainset.n_trainable_classes
         self.reverse_label_map = trainset.reverse_label_map
         # valset = IncImagesDataset(self.data_path,
         #                           transform=pre_process_val,
         #                           mode='val',
-        #                           n_trainable_subset=self.n_trainable_subset)
+        #                           n_trainable_subset=self.n_trainable_subset,
+        #                           reload_labels=self.reload_labels)
         testset = IncImagesDataset(self.data_path,
                                    transform=pre_process_test,
-                                   mode='test')
+                                   mode='test',
+                                   reload_labels=self.reload_labels)
         finetuneset = IncImagesDataset(self.data_path,
                                        transform=pre_process_train,
-                                       mode='finetune')
+                                       mode='finetune',
+                                       reload_labels=self.reload_labels)
         self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
                                                        collate_fn=custom_collate,
                                                        shuffle=True, num_workers=8)
@@ -669,13 +659,12 @@ if __name__ == '__main__':
         cudnn.benchmark = True
     os.environ['TORCH_HOME'] = os.path.join(os.path.abspath(os.path.dirname(__file__)),
                                             'torchvision')
-    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=None)
+    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=None,
+                      reload_labels=True)
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
     for epoch in range(10):
         trainer.train(epoch=epoch)
-        trainer.finetune(epoch=epoch)
-        trainer.test(val=True, epoch=epoch)
         score = trainer.test(epoch=epoch, run_on_finetune=True)
         if score > best_score:
             is_best = True
