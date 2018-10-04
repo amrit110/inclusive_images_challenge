@@ -95,5 +95,5 @@ increase in precision.
 - [x] Look at label distributions of top classes.
 
 <p float="left">
-  <img src="/plots/label_distributions.png" width="640" />   
+  <img src="/plots/label_distributions.png" width="1024" />   
 </p>
