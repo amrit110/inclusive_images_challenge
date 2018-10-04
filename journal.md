@@ -38,7 +38,7 @@ and using minimal information from the finetuning set.
 restrict to use any label subset based on Stage-1 label distribution.
 
 <p float="left">
-  <img src="/plots/sample_geo_distribution.png" width="640" />   
+  <img src="/plots/sample_geo_distribution.png" width="640" />
 </p>
 
 ### Relevant papers
@@ -68,7 +68,7 @@ fine-tune further.
 * `submission_11.csv` - `0.435`
 
 
-- [x] Train on all allowed classes. No fine-tuning.  
+- [x] Train on all allowed classes. No fine-tuning.
 
 * `submission_16.csv` - `0.296`
 * This is the baseline general performance. Any technique applied, should be on top of this
@@ -95,12 +95,9 @@ increase in precision.
 - [x] Look at label distributions of top classes.
 
 <p float="left">
-  <img src="/plots/label_distributions.png" width="1024" />   
+  <img src="/plots/label_distributions.png" width="1024" />
 </p>
 
-<p float="left">
-  <img src="/plots/label_distributions_1.png" width="1024" />   
-</p>
 
 * Even though the top 32 classes from the test set are present in the training set, the
 frequency distribution is quite different.
