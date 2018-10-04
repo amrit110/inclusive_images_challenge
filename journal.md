@@ -97,3 +97,10 @@ increase in precision.
 <p float="left">
   <img src="/plots/label_distributions.png" width="1024" />   
 </p>
+
+<p float="left">
+  <img src="/plots/label_distributions_1.png" width="1024" />   
+</p>
+
+* Even though the top 32 classes from the test set are present in the test set, the
+frequency distribution is quite different.
