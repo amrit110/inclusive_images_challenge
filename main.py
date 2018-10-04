@@ -17,12 +17,14 @@ import torchvision.transforms as transforms
 from utils import read_csv, setup_logging, save_checkpoint, compute_f_score
 from utils import custom_collate
 
+from drn import drn_d_107, drn_c_26
+
 
 # Parse Args
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--batch-size', default=32, type=float, help='batch size')
-parser.add_argument('--exp_name', default='inclusive_images_challenge_without_machine_labels', type=str,
+parser.add_argument('--exp_name', default='inclusive_images_challenge_known', type=str,
                     help='name of experiment')
 parser.add_argument('--resume', '-r', action='store_true', default=False,
                     help='resume from checkpoint')
@@ -59,7 +61,6 @@ class RandomCrop(object):
 
         Args:
             img (PIL.Image): image to be pre-processed
-
         Returns:
             list: pre-processed data-point containing image, and label if inputted
 
@@ -106,7 +107,6 @@ class IncImagesDataset:
                 LOGGER.info("Creating label dicts, this takes a few minutes ...")
                 self.trainval_human_labels = self.read_trainval_human_labels()
                 self.trainval_machine_labels = self.read_trainval_machine_labels()
-                self.trainval_machine_labels = {}
                 self.trainval_bbox_labels = self.read_trainval_bbox_labels()
                 self.save_labels_to_cache()
         self.test_labels = self.read_tuning_labels_stage_1()
@@ -118,19 +118,34 @@ class IncImagesDataset:
             self.n_trainable_subset = self.n_trainable_classes
             self.classes_subset = list(self.label_map.keys())
         else:
-            self.classes_subset = self.get_n_most_frequent_classes(self.test_labels,
-                                                                   self.n_trainable_subset)
+            self.classes_subset, _ = self.get_n_most_frequent_classes(self.test_labels,
+                                                                      self.n_trainable_subset)
         if mode != 'test' and mode != 'finetune':
             # Remove samples which don't have a trainable class
             self.filter_set_based_on_trainable_classes(set='train')
-            self.filter_set_based_on_trainable_classes(set='val')
+            # self.filter_set_based_on_trainable_classes(set='val')
             LOGGER.info("No. of train images: {}, val images: {}".format(len(self.train_images),
                                                                          len(self.val_images)))
             LOGGER.info("No. of trainable classes: {}".format(len(self.classes_subset)))
+            _, class_weights = self.get_n_most_frequent_classes(self.trainval_human_labels,
+                                                                self.n_trainable_subset)
+            self.class_weights = torch.from_numpy(class_weights).float().to(device)
         self.test_images = self.get_test_image_list()
         if mode == 'test':
             LOGGER.info("No. of test images: {}".format(len(self.test_images)))
             LOGGER.info("No. of trainable classes: {}".format(len(self.classes_subset)))
+
+    def get_n_trainable_classes(self):
+        """Return n_trainable_classes attribute."""
+        return self.n_trainable_classes
+
+    def get_reverse_label_map(self):
+        """Return reverse_label_map attribute."""
+        return self.reverse_label_map
+
+    def get_class_weights(self):
+        """Return class_weights attribute."""
+        return self.class_weights
 
     def load_labels_from_cache(self):
         """Load label dicts from cache."""
@@ -324,22 +339,31 @@ class IncImagesDataset:
         for idx, item in enumerate(contents):
             image_id = item[0]
             labels = item[1].split(' ')
-            tuning_labels[image_id] = labels
+            tuning_labels[image_id] = {'labels': labels, 'confidences': [1] * len(labels)}
         return tuning_labels
 
     def get_n_most_frequent_classes(self, label_set, n_classes):
         """Get most frequent classes from the training / tuning set."""
         labels_freq = {}
         for key, item in label_set.items():
-            for label in item:
+            for label in item['labels']:
                 if not label in labels_freq:
-                    labels_freq[label] = 0
+                    labels_freq[label] = 1
                 else:
                     labels_freq[label] += 1
         label_ids = list(labels_freq.keys())
         label_freqs = list(labels_freq.values())
         label_ids = list(reversed([x for _, x in sorted(zip(label_freqs, label_ids))]))
-        return label_ids[0:n_classes]
+        class_weights = np.ones(n_classes)
+        class_weights_flags = np.zeros(n_classes)
+        for label_id, freq in labels_freq.items():
+            cls_index = self.label_map.get(label_id, None)
+            if cls_index is not None:
+                class_weights_flags[cls_index] = 1
+                class_weights[cls_index] = freq
+        class_weights = 1 / class_weights
+        class_weights = class_weights * class_weights_flags
+        return label_ids[0:n_classes], class_weights
 
     def get_labelids_sorted_by_freq(self, label_dict, labels_freq=None, test=False):
         """Get the label ids based on frequency of occurence."""
@@ -414,8 +438,7 @@ class IncImagesDataset:
                                                        {'labels': [None], 'confidences': [None]})
             label = self.merge_labels(label_human, label_machine, label_bbox)
         else:
-            label = self.test_labels.get(image_id, [None])
-            label = {'labels': label, 'confidences': [1] * len(label)}
+            label = self.test_labels.get(image_id, {'labels': [None], 'confidences': [None]})
         one_hot = self.label_to_vector(label)
         return img, one_hot, image_id
 
@@ -438,18 +461,12 @@ class Net(nn.Module):
     def __init__(self, num_classes=1000):
         """Constructor."""
         super(Net, self).__init__()
-        self.resnet = models.resnet152(pretrained=False)
+        self.drn = drn_c_26(num_classes=num_classes)
         self.num_classes = num_classes
-        self.redefine_final_layer()
-
-    def redefine_final_layer(self):
-        """Make final layer have correct number of feature maps."""
-        last_layer_replace = nn.Linear(2048, self.num_classes)
-        self.resnet._modules['fc'] = last_layer_replace
 
     def forward(self, x):
         """Forward pass."""
-        out = self.resnet(x)
+        out = self.drn(x)
         out = torch.sigmoid(out)
         return out
 
@@ -503,55 +520,76 @@ class Trainer:
         tuning_labels = pd.read_csv(file_path, names=['id', 'labels'], index_col=['id'])
         return tuning_labels
 
-    def prepare_loaders(self):
-        """Prepare data loaders."""
-        pre_process_train = transforms.Compose([transforms.Resize((256, 256)),
-                                                transforms.RandomHorizontalFlip(),
-                                                RandomCrop((224, 224)),
-                                                transforms.ToTensor(),
-                                                transforms.Normalize((0.4561, 0.4303, 0.3950),
-                                                                     (0.1257, 0.1236, 0.1281))])
-        pre_process_val = transforms.Compose([transforms.Resize((256, 256)),
-                                              transforms.ToTensor(),
-                                              transforms.Normalize((0.4561, 0.4303, 0.3950),
-                                                                   (0.1257, 0.1236, 0.1281))])
-        pre_process_test = transforms.Compose([transforms.Resize((256, 256)),
-                                               transforms.ToTensor(),
-                                               transforms.Normalize((0.4561, 0.4303, 0.3950),
-                                                                    (0.1257, 0.1236, 0.1281))])
+    def get_pre_process(self, phase='train'):
+        """Get pre-process function."""
+        if phase == 'train':
+            return transforms.Compose([transforms.Resize((256, 256)),
+                                       transforms.RandomHorizontalFlip(),
+                                       RandomCrop((224, 224)),
+                                       transforms.ToTensor(),
+                                       transforms.Normalize((0.4561, 0.4303, 0.3950),
+                                                            (0.1257, 0.1236, 0.1281))])
+        else:
+            return transforms.Compose([transforms.Resize((256, 256)),
+                                       transforms.ToTensor(),
+                                       transforms.Normalize((0.4561, 0.4303, 0.3950),
+                                                            (0.1257, 0.1236, 0.1281))])
+
+    def prepare_train_loader(self):
+        """Prepare training data-loader."""
+        pre_process = self.get_pre_process()
         trainset = IncImagesDataset(self.data_path,
-                                    transform=pre_process_train,
+                                    transform=pre_process,
                                     mode='train',
                                     n_trainable_subset=self.n_trainable_subset,
                                     reload_labels=self.reload_labels)
-        # just grab these from the dataset for now
-        self.num_classes = trainset.n_trainable_classes
-        self.reverse_label_map = trainset.reverse_label_map
-        # valset = IncImagesDataset(self.data_path,
-        #                           transform=pre_process_val,
-        #                           mode='val',
-        #                           n_trainable_subset=self.n_trainable_subset,
-        #                           reload_labels=self.reload_labels)
-        testset = IncImagesDataset(self.data_path,
-                                   transform=pre_process_test,
-                                   mode='test',
-                                   reload_labels=self.reload_labels)
-        finetuneset = IncImagesDataset(self.data_path,
-                                       transform=pre_process_train,
-                                       mode='finetune',
-                                       reload_labels=self.reload_labels)
         self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
                                                        collate_fn=custom_collate,
                                                        shuffle=True, num_workers=8)
-        # self.valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size,
-        #                                              collate_fn=custom_collate,
-        #                                              shuffle=False, num_workers=8)
-        self.testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
-                                                      collate_fn=custom_collate,
-                                                      shuffle=False, num_workers=4)
+        self.num_classes = trainset.get_n_trainable_classes()
+        self.reverse_label_map = trainset.get_reverse_label_map()
+        self.class_weights = trainset.get_class_weights()
+
+    def prepare_finetune_loader(self):
+        """Prepare loader for stage-1 finetune set."""
+        pre_process = self.get_pre_process()
+        finetuneset = IncImagesDataset(self.data_path,
+                                       transform=pre_process,
+                                       mode='finetune',
+                                       reload_labels=self.reload_labels)
         self.finetuneloader = torch.utils.data.DataLoader(finetuneset, batch_size=args.batch_size,
                                                           collate_fn=custom_collate,
                                                           shuffle=False, num_workers=8)
+
+    def prepare_val_loader(self):
+        """Prepare validation data-loader."""
+        pre_process = self.get_pre_process(phase='val')
+        valset = IncImagesDataset(self.data_path,
+                                  transform=pre_process,
+                                  mode='val',
+                                  n_trainable_subset=self.n_trainable_subset,
+                                  reload_labels=self.reload_labels)
+        self.valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size,
+                                                     collate_fn=custom_collate,
+                                                     shuffle=False, num_workers=8)
+
+    def prepare_test_loader(self):
+        """Prepare loader for testing."""
+        pre_process = self.get_pre_process(phase='test')
+        testset = IncImagesDataset(self.data_path,
+                                   transform=pre_process,
+                                   mode='test',
+                                   reload_labels=self.reload_labels)
+        self.testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
+                                                      collate_fn=custom_collate,
+                                                      shuffle=False, num_workers=4)
+
+    def prepare_loaders(self):
+        """Prepare data loaders."""
+        self.prepare_train_loader()
+        self.prepare_finetune_loader()
+        # self.prepare_val_loader()
+        self.prepare_test_loader()
 
     def lower_lr(self):
         """Decrease learning rate by a factor of 10."""
@@ -569,7 +607,8 @@ class Trainer:
             inputs, targets = inputs.to(device), targets.to(device)
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
-            loss = F.binary_cross_entropy(outputs, targets, reduction='none').sum() / args.batch_size
+            loss = F.binary_cross_entropy(outputs, targets, weight=self.class_weights,
+                                          reduction='none').sum() / args.batch_size
             loss.backward()
             self.optimizer.step()
             train_loss += loss.item()
@@ -590,7 +629,8 @@ class Trainer:
             inputs, targets = inputs.to(device), targets.to(device)
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
-            loss = F.binary_cross_entropy(outputs, targets, reduction='none').sum() / args.batch_size
+            loss = F.binary_cross_entropy(outputs, targets, weight=self.class_weights,
+                                          reduction='none').sum() / args.batch_size
             loss.backward()
             self.optimizer.step()
             train_loss += loss.item()
@@ -660,7 +700,7 @@ if __name__ == '__main__':
     os.environ['TORCH_HOME'] = os.path.join(os.path.abspath(os.path.dirname(__file__)),
                                             'torchvision')
     trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=None,
-                      reload_labels=True)
+                      reload_labels=False)
     best_score, is_best, score = 0, 0, False
     LOGGER.info("Starting training ...")
     for epoch in range(10):

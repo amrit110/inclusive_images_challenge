@@ -91,3 +91,9 @@ interesting to not use them and compare. Recall is weighted more, so it might al
 increase in precision.
 
 - [ ] Add augmentations and improve baseline.
+
+- [x] Look at label distributions of top classes.
+
+<p float="left">
+  <img src="/plots/label_distributions.png" width="640" />   
+</p>
