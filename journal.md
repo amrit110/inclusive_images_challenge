@@ -102,5 +102,5 @@ increase in precision.
   <img src="/plots/label_distributions_1.png" width="1024" />   
 </p>
 
-* Even though the top 32 classes from the test set are present in the test set, the
+* Even though the top 32 classes from the test set are present in the training set, the
 frequency distribution is quite different.
