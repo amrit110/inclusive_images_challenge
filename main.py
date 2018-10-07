@@ -22,13 +22,13 @@ from drn import drn_d_107, drn_c_26
 
 # Parse Args
 parser = argparse.ArgumentParser(description='Inclusive Images Challenge')
-parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-parser.add_argument('--batch-size', default=32, type=float, help='batch size')
-parser.add_argument('--exp_name', default='inclusive_images_challenge_known', type=str,
+parser.add_argument('--lr', default=1, type=float, help='learning rate')
+parser.add_argument('--batch-size', default=16, type=float, help='batch size')
+parser.add_argument('--exp_name', default='train_without_machine_labels_484', type=str,
                     help='name of experiment')
 parser.add_argument('--resume', '-r', action='store_true', default=False,
                     help='resume from checkpoint')
-parser.add_argument('--checkpoint-path', default='./checkpoints_all_trainable_with_machine_labels/checkpoint.pth.tar', type=str,
+parser.add_argument('--checkpoint-path', default='./checkpoints_all_trainable/checkpoint.pth.tar', type=str,
                     help='name of experiment')
 args = parser.parse_args()
 
@@ -107,6 +107,7 @@ class IncImagesDataset:
                 LOGGER.info("Creating label dicts, this takes a few minutes ...")
                 self.trainval_human_labels = self.read_trainval_human_labels()
                 self.trainval_machine_labels = self.read_trainval_machine_labels()
+                self.trainval_machine_labels = {}
                 self.trainval_bbox_labels = self.read_trainval_bbox_labels()
                 self.save_labels_to_cache()
         self.test_labels = self.read_tuning_labels_stage_1()
@@ -115,11 +116,12 @@ class IncImagesDataset:
         self.n_trainable_classes = len(self.label_map)
         # Choose if we wish to train on all classes or a subset of the most frequent classes
         if self.n_trainable_subset is None:
-            self.n_trainable_subset = self.n_trainable_classes
+            self.n_trainable_subset = (0, self.n_trainable_classes)
             self.classes_subset = list(self.label_map.keys())
         else:
-            self.classes_subset, _ = self.get_n_most_frequent_classes(self.test_labels,
-                                                                      self.n_trainable_subset)
+            self.classes_subset = self.get_n_most_frequent_classes(self.test_labels,
+                                                                   self.n_trainable_subset[0],
+                                                                   self.n_trainable_subset[1])
         if mode != 'test' and mode != 'finetune':
             # Remove samples which don't have a trainable class
             self.filter_set_based_on_trainable_classes(set='train')
@@ -127,9 +129,6 @@ class IncImagesDataset:
             LOGGER.info("No. of train images: {}, val images: {}".format(len(self.train_images),
                                                                          len(self.val_images)))
             LOGGER.info("No. of trainable classes: {}".format(len(self.classes_subset)))
-            _, class_weights = self.get_n_most_frequent_classes(self.trainval_human_labels,
-                                                                self.n_trainable_subset)
-            self.class_weights = torch.from_numpy(class_weights).float().to(device)
         self.test_images = self.get_test_image_list()
         if mode == 'test':
             LOGGER.info("No. of test images: {}".format(len(self.test_images)))
@@ -142,10 +141,6 @@ class IncImagesDataset:
     def get_reverse_label_map(self):
         """Return reverse_label_map attribute."""
         return self.reverse_label_map
-
-    def get_class_weights(self):
-        """Return class_weights attribute."""
-        return self.class_weights
 
     def load_labels_from_cache(self):
         """Load label dicts from cache."""
@@ -342,7 +337,7 @@ class IncImagesDataset:
             tuning_labels[image_id] = {'labels': labels, 'confidences': [1] * len(labels)}
         return tuning_labels
 
-    def get_n_most_frequent_classes(self, label_set, n_classes):
+    def get_n_most_frequent_classes(self, label_set, lower, upper):
         """Get most frequent classes from the training / tuning set."""
         labels_freq = {}
         for key, item in label_set.items():
@@ -354,16 +349,18 @@ class IncImagesDataset:
         label_ids = list(labels_freq.keys())
         label_freqs = list(labels_freq.values())
         label_ids = list(reversed([x for _, x in sorted(zip(label_freqs, label_ids))]))
-        class_weights = np.ones(n_classes)
-        class_weights_flags = np.zeros(n_classes)
-        for label_id, freq in labels_freq.items():
+        trainable_label_ids = label_ids[lower:upper]
+        return trainable_label_ids
+
+    def get_class_weights(self):
+        """Get class weights."""
+        class_weights = np.zeros(self.n_trainable_classes)
+        for label_id in self.classes_subset:
             cls_index = self.label_map.get(label_id, None)
             if cls_index is not None:
-                class_weights_flags[cls_index] = 1
-                class_weights[cls_index] = freq
-        class_weights = 1 / class_weights
-        class_weights = class_weights * class_weights_flags
-        return label_ids[0:n_classes], class_weights
+                class_weights[cls_index] = 1
+        class_weights = torch.from_numpy(class_weights).float().to(device)
+        return class_weights
 
     def get_labelids_sorted_by_freq(self, label_dict, labels_freq=None, test=False):
         """Get the label ids based on frequency of occurence."""
@@ -461,7 +458,7 @@ class Net(nn.Module):
     def __init__(self, num_classes=1000):
         """Constructor."""
         super(Net, self).__init__()
-        self.drn = drn_c_26(num_classes=num_classes)
+        self.drn = drn_d_107(num_classes=num_classes)
         self.num_classes = num_classes
 
     def forward(self, x):
@@ -505,6 +502,7 @@ class Trainer:
             LOGGER.info('Resuming from checkpoint ...')
             assert os.path.isfile(args.checkpoint_path), 'Error: no checkpoint found!'
             checkpoint = torch.load(args.checkpoint_path)
+            LOGGER.info("F2-Score: {}".format(checkpoint['f2_score']))
             state_dict = checkpoint['state_dict']
             self.model.load_state_dict(state_dict)
 
@@ -548,7 +546,9 @@ class Trainer:
                                                        shuffle=True, num_workers=8)
         self.num_classes = trainset.get_n_trainable_classes()
         self.reverse_label_map = trainset.get_reverse_label_map()
+        LOGGER.info("Getting class masking weights ...")
         self.class_weights = trainset.get_class_weights()
+
 
     def prepare_finetune_loader(self):
         """Prepare loader for stage-1 finetune set."""
@@ -589,7 +589,7 @@ class Trainer:
         self.prepare_train_loader()
         self.prepare_finetune_loader()
         # self.prepare_val_loader()
-        self.prepare_test_loader()
+        # self.prepare_test_loader()
 
     def lower_lr(self):
         """Decrease learning rate by a factor of 10."""
@@ -667,18 +667,20 @@ class Trainer:
                                                                                            n_batches,
                                                                                            test_loss/(batch_idx+1),
                                                                                            score/(batch_idx+1)))
+                f2_score = score / (batch_idx+1)
 
                 if save_submission:
                     preds = self.convert_outputs_to_label_predictions(outputs)
                     for idx, image_id in enumerate(image_ids):
                         self.submission['labels'][image_id] = preds[idx]
+
         if save_submission:
             # self.submission.update(self.tuning_labels) # this is useless and fooling yourself
             submission_file_path = os.path.join(self.submissions_path,
                                                 'submission_{}_{}.csv'.format(args.exp_name, epoch))
             self.submission.to_csv(submission_file_path)
 
-        return score
+        return f2_score
 
     def convert_outputs_to_label_predictions(self, outputs, threshold=0.25):
         """Convert output predictions to label codes."""
@@ -699,20 +701,26 @@ if __name__ == '__main__':
         cudnn.benchmark = True
     os.environ['TORCH_HOME'] = os.path.join(os.path.abspath(os.path.dirname(__file__)),
                                             'torchvision')
-    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=None,
+    trainer = Trainer(data_path='/staging/inc_images', n_trainable_subset=(0, 484),
                       reload_labels=False)
-    best_score, is_best, score = 0, 0, False
+    best_score, is_best, score = 0, False, 0
     LOGGER.info("Starting training ...")
-    for epoch in range(10):
+    for epoch in range(5):
         trainer.train(epoch=epoch)
         score = trainer.test(epoch=epoch, run_on_finetune=True)
+        LOGGER.info("F2-Score: {}".format(score))
         if score > best_score:
             is_best = True
             best_score = score
+        else:
+            is_best = False
         save_checkpoint({'epoch': epoch + 1, 'f2_score': score,
                          'state_dict': trainer.model.state_dict()},
-                        'checkpoints_all_trainable',
+                        args.exp_name,
                         backup_as_best=is_best)
-        if (epoch + 1) % 5:
-            trainer.lower_lr()
-    score = trainer.test(epoch=110, save_submission=True)
+
+    # NOTE: Finetune
+    # trainer.lower_lr()
+    # for i in range(50):
+    #     trainer.finetune(epoch=epoch)
+    # score = trainer.test(epoch=110, save_submission=True)
