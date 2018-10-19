@@ -7,6 +7,25 @@ import numpy as np
 LOG_FORMAT = '%(asctime)-15s %(levelname)-5s %(name)-15s - %(message)s'
 
 
+def wrap_cuda(pytorch_obj):
+    """Convert tensor object to CudaTensor.
+
+    Loads on GPU if CUDA available.
+    Allows for testing on CPU if CUDA not available.
+
+    Args:
+        pytorch_obj (torch.Tensor): torch tensor
+
+    Returns:
+        torch.Tensor: Same tensor, Cuda type if CUDA available
+
+    """
+    if torch.cuda.is_available():
+        pytorch_obj = pytorch_obj.cuda()
+
+    return pytorch_obj
+
+
 def custom_collate(batch):
     """Create custom collate fn to check input size."""
     inputs, targets, image_ids = [], [], []
