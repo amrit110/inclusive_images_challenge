@@ -261,6 +261,20 @@ class DRN(nn.Module):
             self.inplanes = channels
         return nn.Sequential(*modules)
 
+    def get_n_features_out(self):
+        """Get the number of output features from last conv layer.
+
+        Returns:
+            n_features_out (int): number of output features from last conv layer.
+
+        """
+        try:
+            n_features_out = list(self.children())[-1].in_channels
+        except AttributeError:
+            n_features_out = list(self.children())[-1].in_features
+
+        return n_features_out
+
     # pylint: disable=arguments-differ
     def forward(self, x):
         """Forward pass."""
@@ -309,74 +323,6 @@ class DRN(nn.Module):
         if self.out_middle:
             return x, out_middle
         return x, feats
-
-
-def remove_fc(model):
-    """Remove fully connected layers and return only feature extractor."""
-    try:
-        out_channels_backbone = list(model.children())[-1].in_channels
-    except AttributeError:
-        out_channels_backbone = list(model.children())[-1].in_features
-    model.out_channels_backbone = out_channels_backbone
-    feature_extractor = nn.Sequential(*list(model.children())[:-2])
-    feature_extractor.out_channels_backbone = out_channels_backbone
-    return feature_extractor
-
-
-def drn_c_26(pretrained=False, **kwargs):
-    """Dilated ResNet module variant with 26 layers."""
-    model = DRN(BasicBlock, [1, 1, 2, 2, 2, 2, 1, 1], arch='C', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(MODEL_URLS['drn-c-26']))
-    return remove_fc(model)
-
-
-def drn_c_42(pretrained=False, **kwargs):
-    """Dilated ResNet module variant with 42 layers."""
-    model = DRN(BasicBlock, [1, 1, 3, 4, 6, 3, 1, 1], arch='C', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(MODEL_URLS['drn-c-42']))
-    return remove_fc(model)
-
-
-def drn_c_58(pretrained=False, **kwargs):
-    """Dilated ResNet module variant with 58 layers."""
-    model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 1, 1], arch='C', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(MODEL_URLS['drn-c-58']))
-    return remove_fc(model)
-
-
-def drn_d_22(pretrained=False, **kwargs):
-    """Dilated ResNet module variant with 22 layers."""
-    model = DRN(BasicBlock, [1, 1, 2, 2, 2, 2, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(MODEL_URLS['drn-d-22']))
-    return remove_fc(model)
-
-
-def drn_d_38(pretrained=False, **kwargs):
-    """Dilated ResNet module variant with 38 layers."""
-    model = DRN(BasicBlock, [1, 1, 3, 4, 6, 3, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(MODEL_URLS['drn-d-38']))
-    return remove_fc(model)
-
-
-def drn_d_54(pretrained=False, **kwargs):
-    """Dilated ResNet module variant with 54 layers."""
-    model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(MODEL_URLS['drn-d-54']))
-    return remove_fc(model)
-
-
-def drn_d_105(pretrained=False, **kwargs):
-    """Dilated ResNet module variant with 105 layers."""
-    model = DRN(Bottleneck, [1, 1, 3, 4, 23, 3, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(MODEL_URLS['drn-d-105']))
-    return remove_fc(model)
 
 
 def drn_d_107(pretrained=False, **kwargs):

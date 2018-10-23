@@ -46,6 +46,9 @@ restrict to use any label subset based on Stage-1 label distribution.
 * No Classification without Representation: Assessing Geodiversity Issues in
 Open Data Sets for the Developing World - https://arxiv.org/pdf/1711.08536.pdf
 
+* CNN-RNN: A Unified Framework for Multi-label Image Classification -
+https://arxiv.org/pdf/1604.04573.pdf.
+
 
 ### Tasks:
 
@@ -75,7 +78,6 @@ fine-tune further.
 without using much knowledge from Stage-1 finetuning set.
 * Use more augmentations like random-crops, color jitters and brightness augs to improve this baseline.
 
-
 - [x] Do error analysis on the fine-tuning images, to see where the classifier is struggling.
 Compute TPs, FPs and FNs, look at the images.
 
@@ -83,14 +85,14 @@ Compute TPs, FPs and FNs, look at the images.
 This could be due to the highly noisy machine generated labels used for training. So, could be
 interesting to not use them and compare. Recall is weighted more, so it might also hurt the F2-score.
 
-
 - [x] Train without using machine labels.
 
 * `submission_17.csv` - 0.191
 * Lower compared to using the machine labels, since the decrease in recall is more than any
 increase in precision.
 
-- [ ] Add augmentations and improve baseline.
+- [x] Add augmentations and improve baseline. Added random crops, yet to add some brightness
+and color augmentations.
 
 - [x] Look at label distributions of top classes.
 
@@ -98,6 +100,21 @@ increase in precision.
   <img src="/plots/label_distributions.png" width="1024" />
 </p>
 
-
 * Even though the top 32 classes from the test set are present in the training set, the
 frequency distribution is quite different.
+
+
+* * `submission_25.csv` - 0.485, So far best performance comes from training with
+machine labels on the 484 classes, finetuning on the provided 1000 labelled images,
+and then predicting on remaining images, finetuning further on them (pseudo labels).
+
+
+- [ ] Add color and brightness augmentations.
+
+- [ ] Add function to train model ensemble.
+
+- [ ] Check if CNN-RNN baseline training seems promising, if so implement beam-search
+algorithm for inference.
+
+- [ ] Investigate Virtual Adversarial Training, to be able to train using semi-supervision on the
+stage-1 test set.

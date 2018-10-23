@@ -102,7 +102,7 @@ class IncImagesDataset:
         if self.n_trainable_subset is None:
             self.n_trainable_subset = (0, self.n_trainable_classes)
 
-        self.classes_subset = self.get_n_most_frequent_classes(self.test_labels,
+        self.classes_subset = self.get_n_most_frequent_classes(self.trainval_human_labels,
                                                                self.n_trainable_subset[0],
                                                                self.n_trainable_subset[1])
 
@@ -504,9 +504,8 @@ class IncImagesDataset:
         label_vector = self.label_to_vector(label)
 
         one_hot_vectors = self.labels_to_one_hot(label)
-        print(one_hot_vectors)
 
-        return img, label_vector, image_id
+        return img, label_vector, one_hot_vectors, image_id
 
     def label_to_vector(self, labels):
         """Convert string of labels to binary vector.
@@ -547,9 +546,17 @@ class IncImagesDataset:
                 label_index = self.label_map.get(label, None)
                 if label_index is not None:
                     label_vector[label_index] = 1
+                    label_vector = np.expand_dims(label_vector, 0)
                     label_vectors.append((label_vector, self.classes_subset[label]))
 
         label_vectors.sort(key=operator.itemgetter(1), reverse=True)
-        label_vectors = [label_vector_tuple[0] for label_vector_tuple in label_vectors]
+        label_vectors = [torch.from_numpy(label_vector_tuple[0]).float() \
+            for label_vector_tuple in label_vectors]
+
+        # label of zeros when there are no labels
+        if len(label_vectors) == 0:
+            label_vector = np.zeros(self.n_trainable_classes)
+            label_vector = np.expand_dims(label_vector, 0)
+            label_vectors.append(torch.from_numpy(label_vector).float())
 
         return label_vectors

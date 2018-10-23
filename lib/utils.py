@@ -28,16 +28,17 @@ def wrap_cuda(pytorch_obj):
 
 def custom_collate(batch):
     """Create custom collate fn to check input size."""
-    inputs, targets, image_ids = [], [], []
+    inputs, labels, targets, image_ids = [], [], [], []
     for item in batch:
         if item[0].size(0) == 3:
             inputs.append(np.expand_dims(item[0], 0))
-            targets.append(np.expand_dims(item[1], 0))
-            if len(item) == 3: # hacky check to see if image_ids are there
-                image_ids.append(item[2])
+            labels.append(np.expand_dims(item[1], 0))
+            targets.append(item[2])
+            if len(item) == 4: # hacky check to see if image_ids are there
+                image_ids.append(item[3])
     inputs = torch.from_numpy(np.concatenate(inputs)).float()
-    targets = torch.from_numpy(np.concatenate(targets)).float()
-    return inputs, targets, image_ids
+    labels = torch.from_numpy(np.concatenate(labels)).float()
+    return inputs, labels, targets, image_ids
 
 
 def compute_f_score(probs, label, threshold=0.25, beta=2):
