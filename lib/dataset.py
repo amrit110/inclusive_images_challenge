@@ -1,5 +1,7 @@
 """Module with dataset class, and data pre-processing (transforms)."""
 
+
+# Imports.
 import os, glob
 import numbers
 import random
@@ -9,6 +11,7 @@ import operator
 import numpy as np
 import torch
 from PIL import Image
+from imgaug import augmenters as iaa
 
 from lib.utils import read_csv, wrap_cuda
 
@@ -69,11 +72,88 @@ class RandomCrop(object):
         return cropped_img
 
 
+class DistortPixels:
+    """Applies pixel distortion functions (noise, blur etc.) to the input image.
+
+    Attributes:
+        aug_prob (float): probability of applying pixel distortion per image
+        augment_ops (AttrDict): augmentation operations to use
+        image_augmenter (imgaug.augmenters.Sequential): sequence of distortions
+
+    """
+
+    def __init__(self, aug_prob, augment_ops):
+        """Constructor."""
+        self.aug_prob = aug_prob
+        self.augment_ops = augment_ops
+        self.image_augmenter = None
+        self.setup_image_augment()
+
+    def setup_image_augment(self):
+        """Prepare the image augmenter using imgaug package."""
+        ops = []
+        params = self.augment_ops.gauss_blur
+        ops.append(iaa.Sometimes(
+            params.use_prob, iaa.GaussianBlur(sigma=(params.sigma[0], params.sigma[1]))))
+        if self.augment_ops.contrast.use:
+            params = self.augment_ops.contrast
+            ops.append(iaa.ContrastNormalization(alpha=(params.alpha[0], params.alpha[1])))
+        if self.augment_ops.add_gauss_noise.use:
+            params = self.augment_ops.add_gauss_noise
+            ops.append(iaa.AdditiveGaussianNoise(loc=params.loc,
+                                                 scale=(params.scale[0], params.scale[1]),
+                                                 per_channel=params.per_channel))
+        if self.augment_ops.brightness.use:
+            params = self.augment_ops.brightness
+            ops.append(iaa.Multiply((params.scale[0], params.scale[1]),
+                                    per_channel=params.per_channel))
+        if self.augment_ops.hue_saturation.use:
+            params = self.augment_ops.hue_saturation
+            ops.append(iaa.AddToHueAndSaturation((params.min, params.max)))
+
+        if not ops:
+            logging.warning('Pixel distortion has been switched on but no operations defined!')
+            ops += iaa.Noop()
+        self.image_augmenter = iaa.Sequential(ops, random_order=True)
+
+    def __call__(self, img, label=None):
+        """Call pixel distortion function.
+
+        Args:
+            img (PIL.Image): image to be pre-processed
+            label (list of PIL.Image): associated labels
+
+        Returns:
+            list: pre-processed data-point containing image, and label if inputted
+
+        """
+        img = np.array(img)
+        img_size = img.shape
+        if (random.random() < self.aug_prob) and (img_size[-1] == 3):
+            img = self.image_augmenter.augment_image(img)
+        img = Image.fromarray(np.uint8(img))
+        return img
+
+
 class IncImagesDataset:
-    """Dataset for the challenge."""
+    """Dataset for the challenge.
+
+    Attributes:
+        data_path (str): path to dataset.
+        transform (torchvision.transforms.transforms.Compose): transforms.
+        cache_dir (str, optional): path to stored label dicts.
+        n_trainable_subset (tuple, optional): range of indices of trainable classes,
+        e.g. (0, 7178).
+        reload_labels (bool, optional): re-create label dicts instead of
+        loading from cache dir.
+        logger (logging.Logger): python logger.
+        bootstrap_mode (bool, optional): bootstrap, mode to load pseudo labels.
+
+    """
 
     def __init__(self, data_path, mode='train', transform=None, cache_dir='cache',
-                 n_trainable_subset=None, reload_labels=False, logger=None):
+                 n_trainable_subset=None, reload_labels=False, logger=None,
+                 bootstrap_mode=False):
         """Constructor."""
         self.data_path = data_path
         self.mode = mode
@@ -82,27 +162,32 @@ class IncImagesDataset:
         self.n_trainable_subset = n_trainable_subset
         self.logger = logger
 
-        if mode != 'test' and mode != 'finetune':
-            self.train_images, self.val_images = self.get_train_val_split()
-            cache_exists = self.load_labels_from_cache()
-            if not cache_exists or reload_labels:
-                self.logger.info("Creating label dicts, this takes a few minutes ...")
-                self.trainval_human_labels = self.read_trainval_human_labels()
-                self.trainval_machine_labels = self.read_trainval_machine_labels()
-                # self.trainval_machine_labels = {}
-                self.trainval_bbox_labels = self.read_trainval_bbox_labels()
-                self.save_labels_to_cache()
+        self.train_images, self.val_images = self.get_train_val_split()
+        cache_exists = self.load_labels_from_cache()
 
-        self.test_labels = self.read_tuning_labels_stage_1()
+        if not cache_exists or reload_labels:
+            self.logger.info("Creating label dicts, this takes a few minutes ...")
+            self.trainval_human_labels = self.read_trainval_human_labels()
+            self.trainval_machine_labels = self.read_trainval_machine_labels()
+            self.trainval_bbox_labels = self.read_trainval_bbox_labels()
+            self.save_labels_to_cache()
+
+        if bootstrap_mode:
+            self.test_labels = self.read_pseudo_labels()
+        else:
+            self.test_labels = self.read_tuning_labels_stage_1()
         self.fine_tune_samples = list(self.test_labels.keys())
         self.label_map, self.reverse_label_map = self.get_label_map()
         self.n_trainable_classes = len(self.label_map)
 
-        # If range of most frequent classes to train not specified, use all
+        # If range of most frequent classes to train not specified, use all.
         if self.n_trainable_subset is None:
             self.n_trainable_subset = (0, self.n_trainable_classes)
 
-        self.classes_subset = self.get_n_most_frequent_classes(self.trainval_human_labels,
+
+        # NOTE: Use test_labels or trainval_human_labels to get most frequent
+        # classes.
+        self.classes_subset = self.get_n_most_frequent_classes(self.test_labels,
                                                                self.n_trainable_subset[0],
                                                                self.n_trainable_subset[1])
 
@@ -200,7 +285,9 @@ class IncImagesDataset:
             random.shuffle(trainval_images)
             len_trainval_set = len(trainval_images)
             train_images = trainval_images[0:int(1 * len_trainval_set)]
-            val_images = trainval_images[int(0.95 * len_trainval_set):]
+
+            # NOTE: Unused
+            val_images = trainval_images[int(1 * len_trainval_set):]
 
         return train_images, val_images
 
@@ -357,13 +444,26 @@ class IncImagesDataset:
 
         return images
 
+    def read_pseudo_labels(self):
+        """Read pseudo model generated labels for bootstrapping."""
+        pseudo_labels = {}
+
+        file_path = os.path.join('pseudo_labels.csv')
+        contents = read_csv(file_path)
+
+        for idx, item in enumerate(contents):
+            if idx == 0: # skip header
+                continue
+            image_id = item[0]
+            labels = item[1].split(' ')
+            pseudo_labels[image_id] = {'labels': labels, 'confidences': [1] * len(labels)}
+        return pseudo_labels
+
     def read_tuning_labels_stage_1(self):
         """Read the labels proved for tuning for stage-1 (test)."""
         tuning_labels = {}
 
         file_path = os.path.join(self.data_path, 'misc', 'tuning_labels.csv')
-        # NOTE: uncomment to use pseudo labels
-        # file_path = os.path.join('pseudo_labels.csv')
         contents = read_csv(file_path)
 
         for idx, item in enumerate(contents):
@@ -393,18 +493,6 @@ class IncImagesDataset:
 
         return trainable_label_ids
 
-    def get_class_weights(self):
-        """Get class weights."""
-        class_weights = np.zeros(self.n_trainable_classes)
-        for label_id in self.classes_subset:
-            cls_index = self.label_map.get(label_id, None)
-            if cls_index is not None:
-                class_weights[cls_index] = 1
-        class_weights = np.ones(self.n_trainable_classes)
-        class_weights = wrap_cuda(torch.from_numpy(class_weights).float())
-
-        return class_weights
-
     def get_labelids_sorted_by_freq(self, label_dict, labels_freq=None, test=False):
         """Get the label ids based on frequency of occurence."""
         if labels_freq is None:
@@ -432,9 +520,11 @@ class IncImagesDataset:
                        'train_5', 'train_6', 'train_7', 'train_8', 'train_9',
                        'train_a', 'train_b', 'train_c', 'train_d', 'train_e',
                        'train_f']
+
         for folder in folder_list:
             images_path = os.path.join(self.data_path, 'train_images', folder)
             train_image_list.extend(glob.glob(os.path.join(images_path, '*.jpg')))
+
         with open('trainval_image_paths.txt', 'w') as f:
             for item in train_image_list:
                 f.write("%s\n" % item)
@@ -503,9 +593,7 @@ class IncImagesDataset:
 
         label_vector = self.label_to_vector(label)
 
-        one_hot_vectors = self.labels_to_one_hot(label)
-
-        return img, label_vector, one_hot_vectors, image_id
+        return img, label_vector, image_id
 
     def label_to_vector(self, labels):
         """Convert string of labels to binary vector.
@@ -527,36 +615,3 @@ class IncImagesDataset:
                     label_vector[label_index] = label_confidence
 
         return label_vector
-
-    def labels_to_one_hot(self, labels):
-        """Take dict of labels and create one hot vectors.
-
-        Args:
-            labels (dict): dict of labels.
-
-        Returns:
-            label_vectors (list): list of one-hot vectors.
-
-        """
-        label_vectors = []
-        for idx, label in enumerate(labels['labels']):
-            label_vector = np.zeros(self.n_trainable_classes)
-            # mapped to trainable classes
-            if label in self.classes_subset:
-                label_index = self.label_map.get(label, None)
-                if label_index is not None:
-                    label_vector[label_index] = 1
-                    label_vector = np.expand_dims(label_vector, 0)
-                    label_vectors.append((label_vector, self.classes_subset[label]))
-
-        label_vectors.sort(key=operator.itemgetter(1), reverse=True)
-        label_vectors = [torch.from_numpy(label_vector_tuple[0]).float() \
-            for label_vector_tuple in label_vectors]
-
-        # label of zeros when there are no labels
-        if len(label_vectors) == 0:
-            label_vector = np.zeros(self.n_trainable_classes)
-            label_vector = np.expand_dims(label_vector, 0)
-            label_vectors.append(torch.from_numpy(label_vector).float())
-
-        return label_vectors

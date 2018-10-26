@@ -159,7 +159,8 @@ class DRN(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000,
                  channels=(16, 32, 64, 128, 256, 512, 512, 512),
-                 out_map=False, out_middle=False, pool_size=28, arch='D'):
+                 out_map=False, out_middle=False, pool_size=28,
+                 out_feats=False, arch='D'):
         """Constructor."""
         super(DRN, self).__init__()
         self.inplanes = channels[0]
@@ -167,6 +168,7 @@ class DRN(nn.Module):
         self.out_dim = channels[-1]
         self.out_middle = out_middle
         self.arch = arch
+        self.out_feats = out_feats
 
         if arch == 'C':
             self.conv1 = nn.Conv2d(3, channels[0], kernel_size=7, stride=1,
@@ -317,6 +319,8 @@ class DRN(nn.Module):
             x = self.fc(x)
         else:
             feats = self.avgpool(x)
+            if self.out_feats:
+                return feats
             x = self.fc(feats)
             x = x.view(x.size(0), -1)
 

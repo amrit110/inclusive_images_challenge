@@ -1,9 +1,12 @@
 """Utility functions."""
 
+# Imports.
 import os, csv, logging, shutil
 import torch
 import numpy as np
 
+
+# Log format.
 LOG_FORMAT = '%(asctime)-15s %(levelname)-5s %(name)-15s - %(message)s'
 
 
@@ -14,10 +17,10 @@ def wrap_cuda(pytorch_obj):
     Allows for testing on CPU if CUDA not available.
 
     Args:
-        pytorch_obj (torch.Tensor): torch tensor
+        pytorch_obj (torch.Tensor): torch tensor.
 
     Returns:
-        torch.Tensor: Same tensor, Cuda type if CUDA available
+        torch.Tensor: Same tensor, Cuda type if CUDA available.
 
     """
     if torch.cuda.is_available():
@@ -27,22 +30,40 @@ def wrap_cuda(pytorch_obj):
 
 
 def custom_collate(batch):
-    """Create custom collate fn to check input size."""
-    inputs, labels, targets, image_ids = [], [], [], []
+    """Create custom collate fn to check input size.
+
+    Args:
+        batch (list): list of items in a batch from data loader.
+
+    Returns:
+        (tuple): inputs, labels and image IDs.
+
+    """
+    inputs, labels, image_ids = [], [], []
     for item in batch:
         if item[0].size(0) == 3:
             inputs.append(np.expand_dims(item[0], 0))
             labels.append(np.expand_dims(item[1], 0))
-            targets.append(item[2])
-            if len(item) == 4: # hacky check to see if image_ids are there
-                image_ids.append(item[3])
+            image_ids.append(item[2])
     inputs = torch.from_numpy(np.concatenate(inputs)).float()
     labels = torch.from_numpy(np.concatenate(labels)).float()
-    return inputs, labels, targets, image_ids
+
+    return inputs, labels, image_ids
 
 
 def compute_f_score(probs, label, threshold=0.25, beta=2):
-    """Compute f-score."""
+    """Compute f-score.
+
+    Args:
+        probs (torch.Tensor): output probabilities.
+        label (torch.Tensor): label tensor.
+        threshold (float, optional): confidence threshold for a prediction.
+        beta (int, optional): beta in F-beta score.
+
+    Returns:
+        (float): f-score.
+
+    """
     probs = probs > threshold
     label = label > threshold
 
@@ -54,6 +75,7 @@ def compute_f_score(probs, label, threshold=0.25, beta=2):
     precision = TP / (TP + FP + 1e-12)
     recall = TP / (TP + FN + 1e-12)
     score = (1 + beta**2) * precision * recall / (beta**2 * precision + recall + 1e-12)
+
     return score.mean(0)
 
 
@@ -108,8 +130,17 @@ def setup_logging(log_path=None, debug=False, logger=None, fmt=LOG_FORMAT):
 
 
 def read_csv(file_path):
-    """Read csv file."""
-    with open(file_path, 'r') as f:
+    """Read csv file.
+
+    Args:
+        file_path (str): path to file.
+
+    Returns:
+        (list): list of contents read from csv file.
+
+    """
+    with open(file_path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         out_list = list(reader)
+
         return out_list

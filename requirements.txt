@@ -6,3 +6,8 @@ dask==0.19.1
 torch==0.4.1
 torchvision==0.2.1
 kaggle==1.4.7.1
+gensim==3.6.0
+attrdict==2.0.0
+pandas==0.20.3
+imgaug==0.2.5
+opencv-python==3.3.0.10
