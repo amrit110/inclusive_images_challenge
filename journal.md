@@ -49,8 +49,10 @@ Open Data Sets for the Developing World - https://arxiv.org/pdf/1711.08536.pdf
 * CNN-RNN: A Unified Framework for Multi-label Image Classification -
 https://arxiv.org/pdf/1604.04573.pdf.
 
+* Realistic Evaluation of Deep Semi-Supervised Learning Algorithms - 
+https://arxiv.org/abs/1804.09170
 
-### Tasks:
+### Tasks
 
 - [x] Train a baseline multi-class classifier, by simply cropping images to
 fixed dimension and predicting for most frequent classes (10). Use only training set.
@@ -70,10 +72,10 @@ fine-tune further.
 
 * `submission_11.csv` - `0.435`
 
-
 - [x] Train on all allowed classes. No fine-tuning.
 
 * `submission_16.csv` - `0.296`
+
 * This is the baseline general performance. Any technique applied, should be on top of this
 without using much knowledge from Stage-1 finetuning set.
 * Use more augmentations like random-crops, color jitters and brightness augs to improve this baseline.
@@ -81,15 +83,9 @@ without using much knowledge from Stage-1 finetuning set.
 - [x] Do error analysis on the fine-tuning images, to see where the classifier is struggling.
 Compute TPs, FPs and FNs, look at the images.
 
-* It seems like precision is quite low, there are many predicted labels and hence FPs.
-This could be due to the highly noisy machine generated labels used for training. So, could be
-interesting to not use them and compare. Recall is weighted more, so it might also hurt the F2-score.
-
 - [x] Train without using machine labels.
 
-* `submission_17.csv` - 0.191
-* Lower compared to using the machine labels, since the decrease in recall is more than any
-increase in precision.
+* `submission_17.csv` - 0.191.
 
 - [x] Add augmentations and improve baseline. Added random crops, yet to add some brightness
 and color augmentations.
@@ -104,17 +100,30 @@ and color augmentations.
 frequency distribution is quite different.
 
 
-* * `submission_25.csv` - 0.485, So far best performance comes from training with
-machine labels on the 484 classes, finetuning on the provided 1000 labelled images,
-and then predicting on remaining images, finetuning further on them (pseudo labels).
+* * `submission_25.csv` - 0.485.
 
 
-- [ ] Add color and brightness augmentations.
+- [x] Add color and brightness augmentations.
 
-- [ ] Add function to train model ensemble.
+- [x] Add function to train model ensemble.
 
-- [ ] Check if CNN-RNN baseline training seems promising, if so implement beam-search
+- [x] Check if CNN-RNN baseline training seems promising, if so implement beam-search
 algorithm for inference.
 
-- [ ] Investigate Virtual Adversarial Training, to be able to train using semi-supervision on the
+- [x] Investigate Virtual Adversarial Training, to be able to train using semi-supervision on the
 stage-1 test set.
+
+- [x] Investigate using word embeddings for labels.
+
+### Final submission approach
+
+* Basic multi-label classifier, with image size cropped to 128 x 128.
+* Use human labels, bbox labels and machine labels where the confidence of 
+machine labels is used, so that we do not train to overestimate.
+* Lots of augmentations.
+* Ensemble to average over predictions.
+* Use training set + stage-1 test set with ensemble predictions as labels, to train for stage-2.
+
+* For inference on stage-1, stage-2, use model ensemble to predict over test set, then bootstrop over 
+those predictions (pseudo labels) for few epochs.
+* Generate final predictions using ensemble.

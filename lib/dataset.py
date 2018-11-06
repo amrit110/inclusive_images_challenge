@@ -162,45 +162,51 @@ class IncImagesDataset:
         self.n_trainable_subset = n_trainable_subset
         self.logger = logger
 
-        self.train_images, self.val_images = self.get_train_val_split()
-        cache_exists = self.load_labels_from_cache()
-
-        if not cache_exists or reload_labels:
-            self.logger.info("Creating label dicts, this takes a few minutes ...")
-            self.trainval_human_labels = self.read_trainval_human_labels()
-            self.trainval_machine_labels = self.read_trainval_machine_labels()
-            self.trainval_bbox_labels = self.read_trainval_bbox_labels()
-            self.save_labels_to_cache()
-
-        if bootstrap_mode:
-            self.test_labels = self.read_pseudo_labels()
-        else:
-            self.test_labels = self.read_tuning_labels_stage_1()
-        self.fine_tune_samples = list(self.test_labels.keys())
         self.label_map, self.reverse_label_map = self.get_label_map()
-        self.n_trainable_classes = len(self.label_map)
 
-        # If range of most frequent classes to train not specified, use all.
-        if self.n_trainable_subset is None:
-            self.n_trainable_subset = (0, self.n_trainable_classes)
+        if self.mode == 'train' or self.mode == 'val':
+            self.train_images, self.val_images = self.get_train_val_split()
+            cache_exists = self.load_labels_from_cache()
+
+            if not cache_exists or reload_labels:
+                self.logger.info("Creating label dicts, this takes a few minutes ...")
+                self.trainval_human_labels = self.read_trainval_human_labels()
+                self.trainval_machine_labels = self.read_trainval_machine_labels()
+                self.trainval_bbox_labels = self.read_trainval_bbox_labels()
+                self.save_labels_to_cache()
+
+            # If range of most frequent classes to train not specified, use all.
+            if self.n_trainable_subset is None:
+                self.n_trainable_subset = (0, self.n_trainable_classes)
 
 
-        # NOTE: Use test_labels or trainval_human_labels to get most frequent
-        # classes.
-        self.classes_subset = self.get_n_most_frequent_classes(self.test_labels,
-                                                               self.n_trainable_subset[0],
-                                                               self.n_trainable_subset[1])
+            # NOTE: Use test_labels or trainval_human_labels to get most frequent
+            # classes.
+            self.classes_subset = self.get_n_most_frequent_classes(self.trainval_human_labels,
+                                                                   self.n_trainable_subset[0],
+                                                                   self.n_trainable_subset[1])
 
-        if mode != 'test' and mode != 'finetune':
             # Remove samples which don't have a trainable class
             self.filter_set_based_on_trainable_classes(set='train')
-            # self.filter_set_based_on_trainable_classes(set='val')
+            self.filter_set_based_on_trainable_classes(set='val')
             self.logger.info("No. of train images: {}, val images: {}".format(len(self.train_images),
                                                                          len(self.val_images)))
             self.logger.info("No. of trainable classes: {}".format(len(self.classes_subset)))
 
-        self.test_images = self.get_test_image_list()
-        if mode == 'test':
+
+        else:
+            if bootstrap_mode:
+                self.test_labels = self.read_pseudo_labels()
+            else:
+                self.test_labels = self.read_tuning_labels_stage_1()
+            
+            self.pseudo_labels = self.read_pseudo_labels()
+            self.fine_tune_samples = list(self.test_labels.keys())
+            self.n_trainable_classes = len(self.label_map)
+            self.classes_subset = list(self.read_trainable_classes().keys())
+
+            self.test_images = self.get_test_image_list()
+
             self.logger.info("No. of test images: {}".format(len(self.test_images)))
             self.logger.info("No. of trainable classes: {}".format(len(self.classes_subset)))
 
@@ -232,6 +238,7 @@ class IncImagesDataset:
             os.path.isfile(machine_labels_cache_path) and \
                 os.path.isfile(machine_labels_cache_path):
             self.logger.info("Loading label dicts from cache ...")
+            
             with open(human_labels_cache_path, 'rb') as handle:
                 self.trainval_human_labels = pickle.load(handle)
             with open(machine_labels_cache_path, 'rb') as handle:
@@ -279,15 +286,14 @@ class IncImagesDataset:
             (tuple): tuple with list of paths to training and validation images.
 
         """
-        with open("trainval_image_paths.txt", "r") as f:
+        with open("trainval_image_paths_full.txt", "r") as f:
             trainval_images = f.read().splitlines()
             random.seed(500)
             random.shuffle(trainval_images)
             len_trainval_set = len(trainval_images)
-            train_images = trainval_images[0:int(1 * len_trainval_set)]
-
-            # NOTE: Unused
-            val_images = trainval_images[int(1 * len_trainval_set):]
+            
+            train_images = trainval_images[0:int(0.95 * len_trainval_set)]
+            val_images = trainval_images[int(0.95 * len_trainval_set):]
 
         return train_images, val_images
 
@@ -313,7 +319,9 @@ class IncImagesDataset:
                                                              {'labels': [None], 'confidences': [None]})
             label_bbox = self.trainval_bbox_labels.get(image_id,
                                                        {'labels': [None], 'confidences': [None]})
-            label = self.merge_labels(label_human, label_machine, label_bbox)
+            label_pseudo = self.pseudo_labels.get(image_id, {'labels': [None], 'confidences': [None]})
+
+            label = self.merge_labels(label_human, label_machine, label_bbox, label_pseudo)
             for lab in label['labels']:
                 if lab in self.classes_subset:
                     # even if 1 label is found, add image and then exit loop
@@ -338,7 +346,7 @@ class IncImagesDataset:
 
         """
         class_map = {}
-        file_path = os.path.join(self.data_path, 'misc', 'class-descriptions.csv')
+        file_path = os.path.join(self.data_path, 'labels', 'class-descriptions.csv')
         contents = read_csv(file_path)
 
         for idx, item in enumerate(contents):
@@ -349,7 +357,7 @@ class IncImagesDataset:
 
     def read_trainable_classes(self):
         """Read file with trainable classes."""
-        file_path = os.path.join(self.data_path, 'misc', 'classes-trainable.csv')
+        file_path = os.path.join(self.data_path, 'labels', 'classes-trainable.csv')
         contents = read_csv(file_path)
         class_map_dict = self.get_class_map_dict()
         trainable_classes = {}
@@ -377,7 +385,7 @@ class IncImagesDataset:
     def read_trainval_human_labels(self):
         """Read the training labels annotated by humans."""
         human_train_labels = {}
-        file_path = os.path.join(self.data_path, 'misc', 'train_human_labels.csv')
+        file_path = os.path.join(self.data_path, 'labels', 'train_human_labels.csv')
         contents = read_csv(file_path)
         class_map = self.get_class_map_dict()
 
@@ -398,7 +406,7 @@ class IncImagesDataset:
     def read_trainval_machine_labels(self):
         """Read the training labels annotated by machines."""
         machine_train_labels = {}
-        file_path = os.path.join(self.data_path, 'misc', 'train_machine_labels.csv')
+        file_path = os.path.join(self.data_path, 'labels', 'train_machine_labels.csv')
         contents = read_csv(file_path)
         class_map = self.get_class_map_dict()
 
@@ -419,7 +427,7 @@ class IncImagesDataset:
     def read_trainval_bbox_labels(self):
         """Read the bbox training labels provided by open images."""
         bbox_train_labels = {}
-        file_path = os.path.join(self.data_path, 'misc', 'train_bounding_boxes.csv')
+        file_path = os.path.join(self.data_path, 'labels', 'train_bounding_boxes.csv')
         contents = read_csv(file_path)
         class_map = self.get_class_map_dict()
 
@@ -439,7 +447,7 @@ class IncImagesDataset:
 
     def get_test_image_list(self):
         """Get list of paths to test images."""
-        images_path = os.path.join(self.data_path, 'misc', 'stage_1_test_images')
+        images_path = os.path.join(self.data_path, 'test_images')
         images = glob.glob(os.path.join(images_path, '*.jpg'))
 
         return images
@@ -448,7 +456,7 @@ class IncImagesDataset:
         """Read pseudo model generated labels for bootstrapping."""
         pseudo_labels = {}
 
-        file_path = os.path.join('pseudo_labels.csv')
+        file_path = os.path.join('predictions.csv')
         contents = read_csv(file_path)
 
         for idx, item in enumerate(contents):
@@ -463,7 +471,7 @@ class IncImagesDataset:
         """Read the labels proved for tuning for stage-1 (test)."""
         tuning_labels = {}
 
-        file_path = os.path.join(self.data_path, 'misc', 'tuning_labels.csv')
+        file_path = os.path.join(self.data_path, 'labels', 'tuning_labels.csv')
         contents = read_csv(file_path)
 
         for idx, item in enumerate(contents):
@@ -529,13 +537,14 @@ class IncImagesDataset:
             for item in train_image_list:
                 f.write("%s\n" % item)
 
-    def merge_labels(self, human_label, machine_label, bbox_label):
+    def merge_labels(self, human_label, machine_label, bbox_label, label_pseudo):
         """Merge list of all annotations.
 
         Args:
             human_label (dict): dict with human verified labels.
             machine_label (dict): dict with machine generated labels.
             bbox_label (dict): dict with labels from bbox set.
+            label_pseudo (dict): pseudo labels predicted
 
         Returns:
             merge_labels (dict): merged labels dict.
@@ -553,6 +562,11 @@ class IncImagesDataset:
             if not item in merged_label['labels']:
                 merged_label['labels'].append(item)
                 merged_label['confidences'].append(machine_label['confidences'][idx])
+        for idx, item in enumerate(label_pseudo['labels']):
+            if not item in merged_label['labels']:
+                merged_label['labels'].append(item)
+                merged_label['confidences'].append(label_pseudo['confidences'][idx])
+
         return merged_label
 
     def __getitem__(self, index):
@@ -573,8 +587,8 @@ class IncImagesDataset:
             image_path = self.test_images[index]
         elif self.mode == 'finetune':
             image_id = self.fine_tune_samples[index]
-            image_path = os.path.join(self.data_path, 'misc',
-                                      'stage_1_test_images', image_id + '.jpg')
+            image_path = os.path.join(self.data_path,
+                                      'test_images', image_id + '.jpg')
 
         img = Image.open(image_path)
         img = self.transform(*[img])
@@ -587,7 +601,9 @@ class IncImagesDataset:
                                                              {'labels': [None], 'confidences': [None]})
             label_bbox = self.trainval_bbox_labels.get(image_id,
                                                        {'labels': [None], 'confidences': [None]})
-            label = self.merge_labels(label_human, label_machine, label_bbox)
+            label_pseudo = self.pseudo_labels.get(image_id, {'labels': [None], 'confidences': [None]})
+
+            label = self.merge_labels(label_human, label_machine, label_bbox, label_pseudo)
         else:
             label = self.test_labels.get(image_id, {'labels': [None], 'confidences': [None]})
 

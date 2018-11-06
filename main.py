@@ -22,12 +22,12 @@ parser.add_argument('--batch-size', default=64, type=float, help='batch size')
 parser.add_argument('--img-size', default=128, type=float, help='image size to use')
 parser.add_argument('--n-trainable-subset', default=None, type=tuple,
                     help='number of top subset classes to train')
-parser.add_argument('--exp-name', default='debug', type=str,
+parser.add_argument('--exp-name', default='evaluate', type=str,
                     help='name of experiment')
 parser.add_argument('--resume', '-r', action='store_true', default=False,
                     help='resume from checkpoint')
 parser.add_argument('--checkpoint-path',
-                    default='./experiments/ensemble_stage_1_5/model_best.pth.tar',
+                    default='',
                     type=str,
                     help='path to save checkpoint')
 parser.add_argument('--data-path', default='/staging/inc_images', type=str,
@@ -36,17 +36,18 @@ parser.add_argument('--submissions-path', default='./submissions', type=str,
                     help='path to save submission files')
 parser.add_argument('--reload-labels', default=False, type=bool,
                     help='flag if labels need to re-created, if false, will load from cache')
-parser.add_argument('--mode', default='train', type=str,
+parser.add_argument('--mode', default='adapt', type=str,
                     choices=['train', 'finetune', 'test', 'adapt'], help='train or test mode')
-parser.add_argument('--use-ensemble', default=False, type=bool,
+parser.add_argument('--use-ensemble', default=True, type=bool,
                     help='use ensemble of networks')
-parser.add_argument('--n-models', default=1, type=int,
+parser.add_argument('--n-models', default=5, type=int,
                     help='number of models in ensemble')
 parser.add_argument('--ensemble-checkpoint-paths',
-                    default=['experiments/ensemble_stage_1_1_f/checkpoint.pth.tar',
-                             'experiments/ensemble_stage_1_2_f/checkpoint.pth.tar',
-                             'experiments/ensemble_stage_1_3_f/checkpoint.pth.tar',
-                             'experiments/ensemble_stage_1_5_f/checkpoint.pth.tar'],
+                    default=['experiments/ensemble_1/model_best.pth.tar',
+                             'experiments/ensemble_2/model_best.pth.tar',
+                             'experiments/ensemble_3/model_best.pth.tar',
+                             'experiments/ensemble_4/model_best.pth.tar',
+                             'experiments/ensemble_5/model_best.pth.tar'],
                     type=list,
                     help='number of models in ensemble')
 
@@ -123,9 +124,9 @@ if __name__ == '__main__':
 
     if args.mode == 'train':
         LOGGER.info("Starting training ...")
-        for epoch in range(5):
+        for epoch in range(10):
             trainer.train(epoch=epoch)
-            score = trainer.test(epoch=epoch, run_on_finetune=True)
+            score = trainer.test(epoch=epoch, val=True)
             LOGGER.info("F2-Score: {}".format(score))
             if score > best_score:
                 is_best = True
@@ -154,5 +155,5 @@ if __name__ == '__main__':
     elif args.mode == 'adapt':
         LOGGER.info("Starting adaptation using bootstapping on test set ...")
         trainer.lower_lr()
-        for epoch in range(10):
+        for epoch in range(2):
             trainer.adapt_ensemble(epoch)

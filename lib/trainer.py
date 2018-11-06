@@ -93,14 +93,14 @@ class Trainer:
 
     def load_sample_submission(self):
         """Load sample submission csv file."""
-        file_path = os.path.join(self.args.data_path, 'misc', 'stage_1_sample_submission.csv')
+        file_path = os.path.join(self.args.data_path, 'labels', 'stage_1_sample_submission.csv')
         submission = pd.read_csv(file_path, index_col='image_id')
 
         return submission
 
     def load_tuning_labels_stage_1(self):
         """Load the tuning labels (subset of testset)."""
-        file_path = os.path.join(self.args.data_path, 'misc', 'tuning_labels.csv')
+        file_path = os.path.join(self.args.data_path, 'labels', 'tuning_labels.csv')
         tuning_labels = pd.read_csv(file_path, names=['id', 'labels'], index_col=['id'])
 
         return tuning_labels
@@ -147,7 +147,7 @@ class Trainer:
         self.trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.args.batch_size,
                                                        collate_fn=custom_collate,
                                                        shuffle=True, num_workers=8)
-        self.num_classes = trainset.get_n_trainable_classes()
+        self.num_classes = trainset.get_n_trainable_classes() # overrride
         self.reverse_label_map = trainset.get_reverse_label_map()
 
     def prepare_finetune_loader(self, bootstrap_mode=False):
@@ -194,13 +194,17 @@ class Trainer:
         self.testloader = torch.utils.data.DataLoader(testset, batch_size=self.args.batch_size,
                                                       collate_fn=custom_collate,
                                                       shuffle=False, num_workers=4)
-
+        self.reverse_label_map = testset.get_reverse_label_map()
+        self.num_classes = testset.get_n_trainable_classes() # overrride
+        
     def prepare_loaders(self):
         """Prepare data loaders."""
-        self.prepare_train_loader()
-        self.prepare_finetune_loader()
-        # self.prepare_val_loader()
-        self.prepare_test_loader()
+        if self.args.mode == 'train' or self.args.mode == 'val':
+            self.prepare_train_loader()
+            self.prepare_val_loader()
+        else:
+            self.prepare_finetune_loader()
+            self.prepare_test_loader()
 
     def lower_lr(self):
         """Decrease learning rate by a factor of 10."""
@@ -339,11 +343,16 @@ class CNNTrainer(Trainer):
     def adapt_ensemble(self, epoch=0):
         """Run ensemble inference over test set, bootstrap."""
         self.logger.info("Adaptating ensemble epoch {}".format(epoch))
+        
         self.generate_predictions()
         self.prepare_finetune_loader(bootstrap_mode=True)
 
         for model in self.model.ensemble:
             self.finetune(epoch=epoch, model=model)
+
+        if epoch == 1:
+            self.logger.info("Generating final predictions".format(epoch))
+            self.generate_predictions()
 
     def generate_predictions(self):
         self.model.eval()
@@ -361,7 +370,7 @@ class CNNTrainer(Trainer):
 
             # NOTE: Use only for stage-1 test set
             self.submission.update(self.tuning_labels)
-            submission_file_path = 'pseudo_labels.csv'
+            submission_file_path = 'predictions.csv' # used as pseudo labels
             self.submission.to_csv(submission_file_path)
 
     def test(self, epoch=0, val=False, save_submission=False, run_on_finetune=False):
