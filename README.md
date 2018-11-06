@@ -6,17 +6,17 @@
 * Setup data directory - To run, data directory needs to be setup as follows:
 
     .
-    |---`data_dir`              # path to all data
-        |---`train_images`      # training images
-        |---`test_images`
-        |---`labels             # label csv files 
-            |---`class-descriptions.csv`
-            |---`classes-trainable.csv`
+    +--`data_dir`              # path to all data
+        +--`train_images`      # training images
+        +--`test_images`
+        +--`labels             # label csv files
+            +--`class-descriptions.csv`
+            +--`classes-trainable.csv`
             .
             .
             .
 
-* `train_images` with the training data (portion of the Open Images dataset) 
+* `train_images` with the training data (portion of the Open Images dataset)
 is only required to replicate training process.
 
 * `test_images` - can be stage-1 or stage-2.
@@ -25,15 +25,15 @@ is only required to replicate training process.
 
 
 ```bash
-python main.py --data-path <path_to_data_dir> --mode adapt --use-ensemble True --n-models 5
+python main.py --data-path <path_to_data_dir> --mode adapt --use-ensemble true --n-models 5
 ```
 
 * The model ensemble weights are loaded from `experiments`, and predictions over the test
-set are generated, and the enseble then bootstraps itself over the predictions for 2 epochs
+set are generated, and the ensemble then bootstraps itself over the predictions for 2 epochs
 (emperically chosen to give best results), then the generated file is used for submission.
 
 * To train, create a `txt` file with paths to training images. This is split into train/val.
-The `write_trainval_image_list` method in the IncImagesDataset class can be used for this.
+The `write_trainval_image_list` method in the `IncImagesDataset` class can be used for this.
 
 * The script only supports single model training. Single model checkpoint files are combined to
 form an ensemble which is then applied to the test set.
