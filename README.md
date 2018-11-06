@@ -6,12 +6,12 @@
 * Setup data directory - To run, data directory needs to be setup as follows:
 
 ```
-`data_dir` 
-└───`train_images`
-└───`test_images`
-└───`labels`
-    │   `class-descriptions.csv`
-    │   `classes-trainable.csv`
+data_dir
+└─── train_images
+└─── test_images
+└─── labels
+    │   class-descriptions.csv
+    │   classes-trainable.csv
     │   ...
 ```
 
@@ -31,7 +31,7 @@ python main.py --data-path <path_to_data_dir> --mode adapt --use-ensemble true -
 set are generated, and the ensemble then bootstraps itself over the predictions for 2 epochs
 (emperically chosen to give best results), then the generated file is used for submission.
 
-* To train, create a `txt` file with paths to training images. This is split into train/val.
+* To train, create a `text` file with paths to training images. This is split into train/val.
 The `write_trainval_image_list` method in the `IncImagesDataset` class can be used for this.
 
 * The script only supports single model training. Single model checkpoint files are combined to
