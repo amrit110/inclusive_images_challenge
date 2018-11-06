@@ -6,12 +6,12 @@
 * Setup data directory - To run, data directory needs to be setup as follows:
 
     .
-    +--`data_dir`              # path to all data
-        +--`train_images`      # training images
-        +--`test_images`
-        +--`labels             # label csv files
-            +--`class-descriptions.csv`
-            +--`classes-trainable.csv`
+    +-- `data_dir`              # path to all data
+    |   +-- `train_images`      # training images
+    |   +-- `test_images`
+    |   +-- `labels             # label csv files
+    |       +-- `class-descriptions.csv`
+    |       +-- `classes-trainable.csv`
             .
             .
             .
