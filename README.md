@@ -10,9 +10,9 @@ data_dir
 └─── train_images
 └─── test_images
 └─── labels
-    │   class-descriptions.csv
-    │   classes-trainable.csv
-    │   ...
+    │─── class-descriptions.csv
+    │─── classes-trainable.csv
+    │    ...
 ```
 
 * `train_images` with the training data (portion of the Open Images dataset)
