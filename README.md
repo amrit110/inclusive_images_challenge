@@ -1,5 +1,7 @@
 # Inclusive Images Challenge
 
+Kaggle competition https://www.kaggle.com/c/inclusive-images-challenge. Solution implemented in PyTorch, (19th place).
+
 
 ### How to run
 
