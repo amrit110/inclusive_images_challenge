@@ -107,14 +107,6 @@ frequency distribution is quite different.
 
 - [x] Add function to train model ensemble.
 
-- [x] Check if CNN-RNN baseline training seems promising, if so implement beam-search
-algorithm for inference.
-
-- [x] Investigate Virtual Adversarial Training, to be able to train using semi-supervision on the
-stage-1 test set.
-
-- [x] Investigate using word embeddings for labels.
-
 ### Final submission approach
 
 * Basic multi-label classifier, with image size cropped to 128 x 128.
