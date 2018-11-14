@@ -30,7 +30,7 @@ parser.add_argument('--checkpoint-path',
                     default='',
                     type=str,
                     help='path to save checkpoint')
-parser.add_argument('--data-path', default='/staging/inc_images', type=str,
+parser.add_argument('--data-path', default='/path/to/inc_images', type=str,
                     help='path to stored data')
 parser.add_argument('--submissions-path', default='./submissions', type=str,
                     help='path to save submission files')
